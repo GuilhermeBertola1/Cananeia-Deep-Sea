@@ -1,4 +1,4 @@
-# Mar de ASCII
+# Cananeia-Deep-Sea
 
 Jogo online multiplayer em arte ASCII: você comanda um barco num oceano cheio de ilhas, pesca enquanto navega e disputa cardumes com outros jogadores.
 
