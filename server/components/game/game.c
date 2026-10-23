@@ -1,0 +1,519 @@
+#include "game.h"
+#include "world.h"
+#include "fish.h"
+#include "protocol.h"
+#include "storage.h"
+
+#define MAX_SCHOOLS 70
+#define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
+#define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
+#define BASE_CAPACITY 150
+#define BASE_SPEED 5 // células por segundo
+#define SAVE_EVERY (30 * TICK_HZ)
+#define RANK_SIZE 10
+
+// Mercado: vender 200 de uma espécie derruba o preço pela metade,
+// nunca abaixo de 30%, e a pressão cai 1% por segundo.
+#define MARKET_SATURATION 200000 // em milésimos de peixe
+#define MARKET_MIN_PCT 30
+
+typedef enum { SLOT_FREE = 0, SLOT_CONNECTED, SLOT_PLAYING } slot_state_t;
+
+typedef struct {
+    slot_state_t state;
+    int profile; // índice em g.profiles
+    int16_t x, y;
+    int8_t dx, dy;
+    uint8_t color;
+    uint8_t speed;       // células por segundo
+    uint8_t move_budget; // em décimos de célula
+    uint16_t capacity;
+} player_t;
+
+typedef struct {
+    uint8_t alive;
+    uint16_t x, y;
+    uint8_t r, species;
+    uint32_t expires;
+} school_t;
+
+static struct {
+    uint8_t *tiles;
+    uint32_t seed, checksum, tick, rng;
+    game_send_fn send;
+    player_t players[MAX_PLAYERS];
+    school_t schools[MAX_SCHOOLS];
+    profile_t profiles[MAX_PROFILES];
+    uint32_t pressure[FISH_COUNT];
+} g;
+
+static uint8_t out[1024];
+
+// --- utilidades -------------------------------------------------------------
+
+static uint32_t rnd(void) {
+    uint32_t x = g.rng;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return g.rng = x;
+}
+static uint32_t rnd_below(uint32_t n) { return rnd() % n; }
+static int chance(uint32_t pct) { return rnd_below(100) < pct; }
+
+static tile_t tile(int32_t x, int32_t y) {
+    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
+    return (tile_t)g.tiles[y * MAP_W + x];
+}
+
+static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
+
+static int hold_count(const player_t *p) {
+    int n = 0;
+    for (int i = 0; i < FISH_COUNT; i++) n += prof(p)->hold[i];
+    return n;
+}
+
+static int at_dock(const player_t *p) {
+    return p->x >= DOCK_X - 1 && p->x <= DOCK_X + 1 && p->y >= DOCK_Y - 1 && p->y <= DOCK_Y + 1;
+}
+
+static uint32_t price_cents(int sp) {
+    uint32_t base = SPECIES[sp].price_cents;
+    uint32_t p = (uint32_t)((uint64_t)base * MARKET_SATURATION / (MARKET_SATURATION + g.pressure[sp]));
+    uint32_t min = base * MARKET_MIN_PCT / 100;
+    return p < min ? min : p;
+}
+
+static int same_name(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb) return 0;
+        if (!ca) return 1;
+    }
+}
+
+// --- envio ------------------------------------------------------------------
+
+static void send_w(int slot, const writer_t *w) {
+    if (w->ok) g.send(slot, w->buf, w->len);
+}
+
+static void send_all(const writer_t *w) {
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_w(i, w);
+}
+
+static void send_error(int slot, uint8_t code) {
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_ERROR);
+    put_u8(&w, code);
+    send_w(slot, &w);
+}
+
+static void send_event(int slot, uint8_t kind, uint8_t species, uint16_t count, uint32_t value) {
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_EVENT);
+    put_u8(&w, kind);
+    put_u8(&w, species);
+    put_u16(&w, count);
+    put_u32(&w, value);
+    send_w(slot, &w);
+}
+
+static void write_player_info(writer_t *w, int id) {
+    put_u8(w, S_PLAYER);
+    put_u8(w, (uint8_t)id);
+    put_u8(w, g.players[id].color);
+    put_name(w, prof(&g.players[id])->name);
+}
+
+static void send_prices(int slot) {
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_PRICES);
+    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, (uint16_t)price_cents(i));
+    slot < 0 ? send_all(&w) : send_w(slot, &w);
+}
+
+static void send_marks(int slot) {
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_MARKS);
+    size_t count_at = w.len;
+    put_u8(&w, 0);
+    uint8_t n = 0;
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        const school_t *s = &g.schools[i];
+        if (!s->alive) continue;
+        put_u16(&w, s->x);
+        put_u16(&w, s->y);
+        put_u8(&w, MARK_SCHOOL);
+        put_u8(&w, s->species);
+        n++;
+    }
+    out[count_at] = n;
+    slot < 0 ? send_all(&w) : send_w(slot, &w);
+}
+
+static int profile_online(int index) {
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING && g.players[i].profile == index) return 1;
+    return 0;
+}
+
+// Ranking = todos os perfis salvos (online ou não), os 10 mais ricos.
+static void send_rank(int slot) {
+    uint8_t picked[MAX_PROFILES] = {0};
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_RANK);
+    size_t count_at = w.len;
+    put_u8(&w, 0);
+    uint8_t n = 0;
+    for (; n < RANK_SIZE; n++) {
+        int best = -1;
+        for (int i = 0; i < MAX_PROFILES; i++) {
+            if (!g.profiles[i].used || picked[i]) continue;
+            if (best < 0 || g.profiles[i].money > g.profiles[best].money) best = i;
+        }
+        if (best < 0) break;
+        picked[best] = 1;
+        put_u32(&w, g.profiles[best].money);
+        put_u8(&w, (uint8_t)profile_online(best));
+        put_name(&w, g.profiles[best].name);
+    }
+    out[count_at] = n;
+    slot < 0 ? send_all(&w) : send_w(slot, &w);
+}
+
+static int near(int x, int y, int ox, int oy, int extra) {
+    int dx = x - ox, dy = y - oy;
+    return dx >= -(VIEW_RADIUS + extra) && dx <= VIEW_RADIUS + extra && dy >= -(VIEW_RADIUS + extra) &&
+           dy <= VIEW_RADIUS + extra;
+}
+
+static void send_state(int slot) {
+    const player_t *p = &g.players[slot];
+    const profile_t *pr = prof(p);
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_STATE);
+    put_u32(&w, g.tick);
+    put_u16(&w, (uint16_t)p->x);
+    put_u16(&w, (uint16_t)p->y);
+    put_u32(&w, pr->money);
+    put_u16(&w, p->capacity);
+    put_u8(&w, p->speed);
+    put_u8(&w, at_dock(p) ? STATE_AT_DOCK : 0);
+    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, pr->hold[i]);
+
+    uint8_t online = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) online += g.players[i].state == SLOT_PLAYING;
+    put_u8(&w, online);
+
+    size_t count_at = w.len;
+    put_u8(&w, 0);
+    uint8_t n = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        const player_t *o = &g.players[i];
+        if (i == slot || o->state != SLOT_PLAYING || !near(o->x, o->y, p->x, p->y, 0)) continue;
+        put_u8(&w, (uint8_t)i);
+        put_u16(&w, (uint16_t)o->x);
+        put_u16(&w, (uint16_t)o->y);
+        n++;
+    }
+    out[count_at] = n;
+
+    count_at = w.len;
+    put_u8(&w, 0);
+    n = 0;
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        const school_t *s = &g.schools[i];
+        if (!s->alive || !near(s->x, s->y, p->x, p->y, s->r)) continue;
+        put_u16(&w, s->x);
+        put_u16(&w, s->y);
+        put_u8(&w, s->r);
+        put_u8(&w, s->species);
+        n++;
+    }
+    out[count_at] = n;
+    send_w(slot, &w);
+}
+
+// --- regras -----------------------------------------------------------------
+
+static void find_spawn(player_t *p) {
+    for (int i = 0; i < 200; i++) {
+        int dx = (int)rnd_below(31) - 15, dy = (int)rnd_below(31) - 15;
+        int d2 = dx * dx + dy * dy;
+        int min = PORT_RADIUS + 2, max = PORT_RADIUS + 8;
+        if (d2 < min * min || d2 > max * max) continue;
+        if (!tile_is_water(tile(PORT_X + dx, PORT_Y + dy))) continue;
+        p->x = PORT_X + dx;
+        p->y = PORT_Y + dy;
+        return;
+    }
+    p->x = DOCK_X;
+    p->y = DOCK_Y + 1;
+}
+
+static void add_fish(int slot, uint8_t species, int n) {
+    player_t *p = &g.players[slot];
+    int room = p->capacity - hold_count(p);
+    if (room <= 0) {
+        if (g.tick % 50 == 0) send_event(slot, EV_HOLD_FULL, FISH_NONE, 0, 0);
+        return;
+    }
+    int got = n < room ? n : room;
+    prof(p)->hold[species] += got;
+    send_event(slot, EV_CATCH, species, (uint16_t)got, 0);
+}
+
+static void sell(int slot, uint8_t species) {
+    player_t *p = &g.players[slot];
+    if (!at_dock(p)) return;
+    profile_t *pr = prof(p);
+    uint32_t total = 0, count = 0;
+    for (int i = 0; i < FISH_COUNT; i++) {
+        if (species != FISH_NONE && species != i) continue;
+        uint32_t n = pr->hold[i];
+        if (!n) continue;
+        total += price_cents(i) * n;
+        g.pressure[i] += n * 1000;
+        count += n;
+        pr->hold[i] = 0;
+    }
+    if (!count) { send_event(slot, EV_NOTHING_TO_SELL, species, 0, 0); return; }
+    pr->money += total;
+    send_event(slot, EV_SOLD, species, (uint16_t)count, total);
+    send_prices(-1);
+    send_rank(-1);
+}
+
+static int try_move(player_t *p) {
+    int nx = p->x + p->dx, ny = p->y + p->dy;
+    if (tile_is_sailable(tile(nx, ny))) {
+        p->x = nx;
+        p->y = ny;
+        return 1;
+    }
+    // Na diagonal, desliza pela costa.
+    if (p->dx && p->dy && tile_is_sailable(tile(nx, p->y))) return p->x = nx, 1;
+    if (p->dx && p->dy && tile_is_sailable(tile(p->x, ny))) return p->y = ny, 1;
+    return 0;
+}
+
+static void update_player(int slot) {
+    player_t *p = &g.players[slot];
+    int moved = 0;
+    if (p->dx || p->dy) {
+        p->move_budget += p->speed; // speed células/s = speed décimos por tick
+        while (p->move_budget >= 10) {
+            p->move_budget -= 10;
+            moved |= try_move(p);
+        }
+    } else {
+        p->move_budget = 0;
+    }
+    prof(p)->x = p->x;
+    prof(p)->y = p->y;
+
+    if (moved && chance(PASSIVE_CATCH_PCT)) {
+        uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
+        if (sp != FISH_NONE) add_fish(slot, sp, 1);
+    }
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        const school_t *s = &g.schools[i];
+        int dx = p->x - s->x, dy = p->y - s->y;
+        if (s->alive && dx * dx + dy * dy <= s->r * s->r && chance(SCHOOL_CATCH_PCT))
+            add_fish(slot, s->species, 1 + (int)rnd_below(3));
+    }
+}
+
+static void update_schools(void) {
+    int attempts = 2000;
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        school_t *s = &g.schools[i];
+        if (s->alive && s->expires <= g.tick) s->alive = 0;
+        // Nada de cardume colado no porto: precisa sair para buscar.
+        while (!s->alive && attempts-- > 0) {
+            int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+            int dx = x - PORT_X, dy = y - PORT_Y;
+            tile_t t = tile(x, y);
+            if (!tile_is_water(t) || dx * dx + dy * dy < 30 * 30) continue;
+            *s = (school_t){
+                .alive = 1,
+                .x = (uint16_t)x,
+                .y = (uint16_t)y,
+                .r = (uint8_t)(2 + rnd_below(4)),
+                .species = fish_roll(t, rnd()),
+                .expires = g.tick + 600 + rnd_below(1200), // 1 a 3 minutos
+            };
+        }
+    }
+    // Cardumes migram devagar.
+    if (g.tick % 20 != 0) return;
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        school_t *s = &g.schools[i];
+        int nx = s->x + (int)rnd_below(3) - 1, ny = s->y + (int)rnd_below(3) - 1;
+        if (s->alive && tile_is_water(tile(nx, ny))) {
+            s->x = (uint16_t)nx;
+            s->y = (uint16_t)ny;
+        }
+    }
+}
+
+static int valid_name(const uint8_t *name, size_t len) {
+    if (len < 1 || len > NAME_MAX_LEN) return 0;
+    int letters = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (name[i] < 32 || name[i] == 127) return 0;
+        letters += name[i] != ' ';
+    }
+    return letters > 0;
+}
+
+static void join(int slot, const uint8_t *data, size_t len) {
+    if (len < 2 || data[0] != PROTOCOL_VERSION) { send_error(slot, ERR_VERSION); return; }
+    size_t name_len = data[1];
+    if (len < 2 + name_len || !valid_name(data + 2, name_len)) { send_error(slot, ERR_BAD_NAME); return; }
+    char name[NAME_MAX_LEN + 1];
+    memcpy(name, data + 2, name_len);
+    name[name_len] = 0;
+
+    int index = -1, free_index = -1;
+    for (int i = 0; i < MAX_PROFILES; i++) {
+        if (!g.profiles[i].used) {
+            if (free_index < 0) free_index = i;
+        } else if (same_name(g.profiles[i].name, name)) {
+            index = i;
+            break;
+        }
+    }
+    if (index >= 0 && profile_online(index)) { send_error(slot, ERR_NAME_ONLINE); return; }
+    if (index < 0) {
+        if (free_index < 0) { send_error(slot, ERR_FULL); return; }
+        index = free_index;
+        g.profiles[index] = (profile_t){.used = 1};
+        memcpy(g.profiles[index].name, name, name_len + 1);
+        storage_save(index, &g.profiles[index]);
+    }
+
+    player_t *p = &g.players[slot];
+    *p = (player_t){
+        .state = SLOT_PLAYING,
+        .profile = index,
+        .color = (uint8_t)rnd_below(6),
+        .speed = BASE_SPEED,
+        .capacity = BASE_CAPACITY,
+    };
+    // Volta para onde parou, se ainda for água; senão nasce perto do porto.
+    const profile_t *pr = &g.profiles[index];
+    if ((pr->x || pr->y) && tile_is_sailable(tile(pr->x, pr->y))) {
+        p->x = pr->x;
+        p->y = pr->y;
+    } else {
+        find_spawn(p);
+    }
+
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_WELCOME);
+    put_u8(&w, (uint8_t)slot);
+    put_u32(&w, g.seed);
+    put_u16(&w, MAP_W);
+    put_u16(&w, MAP_H);
+    put_u32(&w, g.checksum);
+    put_u8(&w, TICK_HZ);
+    send_w(slot, &w);
+
+    // Apresenta todo mundo para o novo jogador e o novo jogador para todo mundo.
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (g.players[i].state != SLOT_PLAYING) continue;
+        w = writer(out, sizeof out);
+        write_player_info(&w, i);
+        send_w(slot, &w);
+        if (i != slot) {
+            w = writer(out, sizeof out);
+            write_player_info(&w, slot);
+            send_w(i, &w);
+        }
+    }
+    send_prices(slot);
+    send_marks(slot);
+    send_rank(-1);
+    send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
+}
+
+// --- API --------------------------------------------------------------------
+
+void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn send) {
+    memset(&g, 0, sizeof g);
+    g.tiles = tiles;
+    g.seed = seed;
+    g.rng = random_seed ? random_seed : 0x9E3779B9u;
+    g.send = send;
+    world_generate(tiles, seed);
+    g.checksum = world_checksum(tiles);
+    storage_load_all(g.profiles, MAX_PROFILES);
+    update_schools();
+}
+
+int game_connect(void) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (g.players[i].state == SLOT_FREE) {
+            g.players[i] = (player_t){.state = SLOT_CONNECTED};
+            return i;
+        }
+    }
+    return -1;
+}
+
+void game_disconnect(int slot) {
+    if (slot < 0 || slot >= MAX_PLAYERS) return;
+    player_t *p = &g.players[slot];
+    int was_playing = p->state == SLOT_PLAYING;
+    if (was_playing) storage_save(p->profile, prof(p));
+    p->state = SLOT_FREE;
+    if (was_playing) send_rank(-1);
+}
+
+void game_receive(int slot, const uint8_t *data, size_t len) {
+    if (slot < 0 || slot >= MAX_PLAYERS || len < 1) return;
+    player_t *p = &g.players[slot];
+    if (p->state == SLOT_CONNECTED) {
+        if (data[0] == C_JOIN) join(slot, data + 1, len - 1);
+        return;
+    }
+    if (p->state != SLOT_PLAYING) return;
+    switch (data[0]) {
+    case C_INPUT:
+        if (len < 3) return;
+        p->dx = (int8_t)data[1] > 0 ? 1 : (int8_t)data[1] < 0 ? -1 : 0;
+        p->dy = (int8_t)data[2] > 0 ? 1 : (int8_t)data[2] < 0 ? -1 : 0;
+        break;
+    case C_SELL:
+        if (len < 2 || (data[1] >= FISH_COUNT && data[1] != FISH_NONE)) return;
+        sell(slot, data[1]);
+        break;
+    }
+}
+
+void game_save_all(void) {
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) storage_save(g.players[i].profile, prof(&g.players[i]));
+}
+
+void game_tick(void) {
+    g.tick++;
+    update_schools();
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) update_player(i);
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_state(i);
+
+    if (g.tick % TICK_HZ == 0) {
+        for (int i = 0; i < FISH_COUNT; i++) g.pressure[i] = g.pressure[i] * 99 / 100;
+        send_prices(-1);
+        send_marks(-1);
+    }
+    if (g.tick % 50 == 0) send_rank(-1);
+    if (g.tick % SAVE_EVERY == 0) game_save_all();
+}
