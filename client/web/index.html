@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cananeia Deep Sea</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #050b14; }
+    canvas { display: block; outline: none; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" tabindex="1" oncontextmenu="event.preventDefault()"></canvas>
+  <script src="odin.js"></script>
+  <script>
+    // O Odin precisa das próprias funções de ambiente (odin.js), e o emscripten
+    // das dele (raylib, WebSocket). Juntamos as duas na hora de carregar o WASM.
+    var odinMemoryInterface = new odin.WasmMemoryInterface();
+    odinMemoryInterface.setIntSize(4);
+    var odinImports = odin.setupDefaultImports(odinMemoryInterface);
+
+    var Module = {
+      instantiateWasm: (imports, successCallback) => {
+        const allImports = { ...odinImports, ...imports };
+        return WebAssembly.instantiateStreaming(fetch("index.wasm"), allImports).then((output) => {
+          const e = output.instance.exports;
+          odinMemoryInterface.setExports(e);
+          odinMemoryInterface.setMemory(e.memory);
+          return successCallback(output.instance);
+        });
+      },
+      onRuntimeInitialized: () => {
+        const e = wasmExports;
+        e._start();       // procs marcadas com @(init)
+        e.main_start();
+        const canvas = document.getElementById("canvas");
+        const resize = () => e.web_window_size_changed(window.innerWidth, window.innerHeight);
+        window.addEventListener("resize", resize);
+        resize();
+        canvas.focus();
+        const frame = () => {
+          if (e.main_update()) requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      },
+      print: (text) => console.log(text),
+      printErr: (text) => console.error(text),
+      canvas: document.getElementById("canvas"),
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
