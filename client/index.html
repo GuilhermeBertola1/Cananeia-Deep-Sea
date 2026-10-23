@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mar de ASCII</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="join">
+      <pre class="logo">
+        |\
+        | \       M A R   D E   A S C I I
+        |__\
+     ___|___\___
+~~~~ \_________/ ~~~~~~~~~~~~~~~~~~~~~~~~~
+      </pre>
+      <form id="join-form">
+        <input id="name" maxlength="16" placeholder="Nome do capitão" autofocus required />
+        <button type="submit">Zarpar</button>
+      </form>
+      <p class="hint">WASD ou setas para navegar · E no cais para vender · M amplia o minimapa</p>
+    </div>
+
+    <div id="game" hidden>
+      <pre id="screen"></pre>
+      <aside id="hud">
+        <section>
+          <h2 id="hud-name"></h2>
+          <div id="hud-stats"></div>
+        </section>
+        <section>
+          <h3>Minimapa</h3>
+          <canvas id="minimap" width="256" height="256"></canvas>
+          <div id="hud-target"></div>
+          <div class="legend"><i class="lg-you"></i>você <i class="lg-port"></i>porto <i class="lg-school"></i>cardume <i class="lg-player"></i>jogador</div>
+        </section>
+        <section>
+          <h3>Porão</h3>
+          <div id="hud-hold"></div>
+        </section>
+        <section>
+          <h3>Ranking ($)</h3>
+          <ol id="hud-rank"></ol>
+        </section>
+        <section>
+          <h3>Diário de bordo</h3>
+          <div id="hud-log"></div>
+        </section>
+      </aside>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
