@@ -1,0 +1,19 @@
+# builds
+client/build/
+server/build/
+server/build-qemu/
+server/host/cananeia-host
+*.exe
+*.obj
+*.pdb
+
+# ESP-IDF: a configuração gerada vem do sdkconfig.defaults
+server/sdkconfig
+server/sdkconfig.old
+server/managed_components/
+
+# perfis do servidor de teste
+perfis.bin
+
+# sobra do protótipo TypeScript (pode apagar a pasta)
+node_modules/
