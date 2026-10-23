@@ -1,0 +1,38 @@
+menu "Cananeia Deep Sea"
+
+    choice CANANEIA_WIFI_MODE
+        prompt "Modo do Wi-Fi"
+        default CANANEIA_WIFI_AP
+        help
+            Ponto de acesso: o ESP cria a própria rede e o jogo fica em http://192.168.4.1.
+            Estação: o ESP entra numa rede existente e mostra o IP no monitor serial.
+
+        config CANANEIA_WIFI_AP
+            bool "Ponto de acesso (o ESP cria a rede)"
+        config CANANEIA_WIFI_STA
+            bool "Entrar numa rede existente"
+        config CANANEIA_NET_QEMU
+            bool "Ethernet do emulador QEMU (só para testar sem placa)"
+            select ETH_USE_OPENETH
+            help
+                Para rodar com "idf.py qemu". O QEMU não emula Wi-Fi, então
+                o servidor usa a placa de rede virtual dele.
+    endchoice
+
+    config CANANEIA_WIFI_SSID
+        string "Nome da rede (SSID)"
+        default "CananeiaDeepSea"
+
+    config CANANEIA_WIFI_PASSWORD
+        string "Senha da rede"
+        default "cananeia123"
+        help
+            No modo ponto de acesso precisa ter 8 caracteres ou mais. Vazio = rede aberta.
+
+    config CANANEIA_MAP_SEED
+        int "Semente do mapa"
+        default 1337
+        help
+            Mudar a semente gera outro oceano. O cliente recebe a semente ao entrar.
+
+endmenu

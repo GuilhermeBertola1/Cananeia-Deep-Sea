@@ -1,0 +1,5 @@
+# Extra para testar no emulador sem placa (o QEMU não tem Wi-Fi):
+#   idf.py -B build-qemu -D SDKCONFIG=build-qemu/sdkconfig -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.qemu" build
+#   idf.py -B build-qemu qemu --qemu-extra-args="-nic user,model=open_eth,hostfwd=tcp::8080-:80"
+# e abra http://localhost:8080
+CONFIG_CANANEIA_NET_QEMU=y
