@@ -48,8 +48,8 @@ static inline void put_bytes(writer_t *w, const void *src, size_t n) {
     w->len += n;
 }
 static inline void put_u8(writer_t *w, uint8_t v) { put_bytes(w, &v, 1); }
-static inline void put_u16(writer_t *w, uint16_t v) { uint8_t b[2] = {v, v >> 8}; put_bytes(w, b, 2); }
-static inline void put_u32(writer_t *w, uint32_t v) { uint8_t b[4] = {v, v >> 8, v >> 16, v >> 24}; put_bytes(w, b, 4); }
+static inline void put_u16(writer_t *w, uint16_t v) { uint8_t b[2] = {(uint8_t)v, (uint8_t)(v >> 8)}; put_bytes(w, b, 2); }
+static inline void put_u32(writer_t *w, uint32_t v) { uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24)}; put_bytes(w, b, 4); }
 static inline void put_name(writer_t *w, const char *name) {
     size_t n = strlen(name);
     put_u8(w, (uint8_t)n);
