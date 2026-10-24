@@ -3,6 +3,7 @@ client/build/
 server/build/
 server/build-qemu/
 server/host/cananeia-host
+server/host/test_password
 *.exe
 *.obj
 *.pdb

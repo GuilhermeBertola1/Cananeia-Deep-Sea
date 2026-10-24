@@ -2,5 +2,5 @@
 rem Compila o servidor de teste no Windows. Rode no "x64 Native Tools Command Prompt for VS".
 pushd "%~dp0"
 set G=..\components\game
-cl /nologo /std:c11 /O2 /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I%G%\include main.c storage_file.c %G%\world.c %G%\fish.c %G%\game.c /Fe:cananeia-host.exe ws2_32.lib
+cl /nologo /std:c11 /O2 /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I%G%\include main.c storage_file.c password_host.c %G%\world.c %G%\fish.c %G%\game.c /Fe:cananeia-host.exe ws2_32.lib
 popd
