@@ -3,8 +3,10 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 1
+PROTOCOL_VERSION :: 2
 NAME_MAX_LEN :: 16
+PASSWORD_MIN_LEN :: 4
+PASSWORD_MAX_LEN :: 32
 
 // Cliente -> servidor
 C_JOIN :: 0x01
@@ -25,6 +27,8 @@ ERR_BAD_NAME :: 1
 ERR_NAME_ONLINE :: 2
 ERR_FULL :: 3
 ERR_VERSION :: 4
+ERR_BAD_PASSWORD :: 5
+ERR_WRONG_PASSWORD :: 6
 
 EV_CATCH :: 1
 EV_SOLD :: 2
@@ -69,13 +73,16 @@ read_name :: proc(r: ^Reader, buf: []u8) -> string {
 	return string(buf[:n2])
 }
 
-send_join :: proc(name: string) {
-	buf: [3 + NAME_MAX_LEN]u8
+send_join :: proc(name, password: string) {
+	buf: [4 + NAME_MAX_LEN + PASSWORD_MAX_LEN]u8
 	buf[0] = C_JOIN
 	buf[1] = PROTOCOL_VERSION
-	n := copy(buf[3:], name)
+	n := copy(buf[3:3 + NAME_MAX_LEN], name)
 	buf[2] = u8(n)
-	net_send(buf[:3 + n])
+	pos := 3 + n
+	p := copy(buf[pos + 1:pos + 1 + PASSWORD_MAX_LEN], password)
+	buf[pos] = u8(p)
+	net_send(buf[:pos + 1 + p])
 }
 
 send_input :: proc(dx, dy: i8) {

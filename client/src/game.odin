@@ -71,6 +71,9 @@ State :: struct {
 	url:           string,
 	name_buf:      [NAME_MAX_LEN]u8,
 	name_len:      int,
+	pass_buf:      [PASSWORD_MAX_LEN]u8,
+	pass_len:      int,
+	typing_pass:   bool,
 	join_message:  string,
 
 	// mundo
@@ -170,25 +173,37 @@ shutdown :: proc() {
 
 @(private = "file")
 update_join :: proc() {
+	// As teclas vão para o campo que está com o cursor.
+	buf := s.pass_buf[:] if s.typing_pass else s.name_buf[:]
+	length := &s.pass_len if s.typing_pass else &s.name_len
 	for ch := rl.GetCharPressed(); ch != 0; ch = rl.GetCharPressed() {
-		if ch < 32 || ch > 126 do continue // só ASCII no nome, por enquanto
-		if s.name_len < NAME_MAX_LEN {
-			s.name_buf[s.name_len] = u8(ch)
-			s.name_len += 1
+		if ch < 32 || ch > 126 do continue // só ASCII, por enquanto
+		if length^ < len(buf) {
+			buf[length^] = u8(ch)
+			length^ += 1
 		}
 	}
-	if (rl.IsKeyPressed(.BACKSPACE) || rl.IsKeyPressedRepeat(.BACKSPACE)) && s.name_len > 0 do s.name_len -= 1
+	if (rl.IsKeyPressed(.BACKSPACE) || rl.IsKeyPressedRepeat(.BACKSPACE)) && length^ > 0 do length^ -= 1
+	if s.url != "" && (rl.IsKeyPressed(.TAB) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.DOWN)) do s.typing_pass = !s.typing_pass
 
 	name := strings.trim_space(string(s.name_buf[:s.name_len]))
-	if rl.IsKeyPressed(.ENTER) && len(name) > 0 && s.net != .Connecting {
-		if s.net == .Open {
-			send_join(name)
-		} else if net_connect(s.url) {
-			s.net = .Connecting
-			s.join_message = "Conectando..."
-		} else {
-			start_offline()
-		}
+	if !rl.IsKeyPressed(.ENTER) || len(name) == 0 || s.net == .Connecting do return
+	if !s.typing_pass && s.url != "" {
+		s.typing_pass = true // Enter no nome pula para a senha
+		return
+	}
+	if s.url != "" && s.pass_len < PASSWORD_MIN_LEN {
+		// join_message precisa ser texto fixo: o que o tprintf devolve some no fim do quadro.
+		s.join_message = "A senha precisa ter pelo menos 4 caracteres."
+		return
+	}
+	if s.net == .Open {
+		send_join(name, string(s.pass_buf[:s.pass_len]))
+	} else if net_connect(s.url) {
+		s.net = .Connecting
+		s.join_message = "Conectando..."
+	} else {
+		start_offline()
 	}
 }
 
@@ -307,7 +322,7 @@ hold_count :: proc() -> int {
 on_net_open :: proc() {
 	s.net = .Open
 	s.join_message = ""
-	send_join(strings.trim_space(string(s.name_buf[:s.name_len])))
+	send_join(strings.trim_space(string(s.name_buf[:s.name_len])), string(s.pass_buf[:s.pass_len]))
 }
 
 on_net_close :: proc() {
@@ -349,6 +364,11 @@ on_net_message :: proc(data: []u8) {
 		case ERR_NAME_ONLINE: s.join_message = "Esse capitão já está no mar. Use outro nome."
 		case ERR_FULL: s.join_message = "Servidor lotado. Tente mais tarde."
 		case ERR_VERSION: s.join_message = "Versão do jogo diferente do servidor. Recarregue a página."
+		case ERR_BAD_PASSWORD: s.join_message = "A senha precisa ter de 4 a 32 caracteres, sem acento."
+		case ERR_WRONG_PASSWORD:
+			s.join_message = "Senha errada para esse capitão."
+			s.pass_len = 0
+			s.typing_pass = true
 		}
 		s.screen = .Join
 

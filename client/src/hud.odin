@@ -206,6 +206,20 @@ LOGO := [?]string {
 	`~~~~ \_________/ ~~~~~~~~~~~~~~~~~~~~~~~~~~`,
 }
 
+@(private = "file")
+draw_input :: proc(label, value: string, x, y: f32, focused: bool) -> f32 {
+	text(label, x, y, 20, COLOR_QUIET)
+	box_y := y + 28
+	rl.DrawRectangleV({x, box_y}, {340, 34}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, box_y, 340, 34}, 2, COLOR_ACCENT if focused else COLOR_QUIET)
+	text(value, x + 10, box_y + 7, 20, COLOR_INK)
+	if focused && int(rl.GetTime() * 2) % 2 == 0 {
+		cx := x + 12 + text_width(value, 20)
+		rl.DrawRectangleV({cx, box_y + 7}, {10, 20}, COLOR_ACCENT)
+	}
+	return box_y + 48
+}
+
 draw_join :: proc() {
 	sw, sh := rl.GetScreenWidth(), rl.GetScreenHeight()
 	cols := sw / CELL_W
@@ -220,18 +234,14 @@ draw_join :: proc() {
 
 	y := f32((top + 7) * CELL_H)
 	bx := f32(sw) / 2 - 170
-	text("Nome do capitão:", bx, y, 20, COLOR_QUIET)
-	y += 28
-	rl.DrawRectangleV({bx, y}, {340, 34}, COLOR_PANEL)
-	rl.DrawRectangleLinesEx({bx, y, 340, 34}, 2, COLOR_ACCENT)
-	name := string(s.name_buf[:s.name_len])
-	text(name, bx + 10, y + 7, 20, COLOR_INK)
-	if int(rl.GetTime() * 2) % 2 == 0 {
-		cx := bx + 12 + text_width(name, 20)
-		rl.DrawRectangleV({cx, y + 7}, {10, 20}, COLOR_ACCENT)
+	y = draw_input("Nome do capitão:", string(s.name_buf[:s.name_len]), bx, y, !s.typing_pass)
+	if s.url != "" {
+		stars := strings.repeat("*", s.pass_len, context.temp_allocator)
+		y = draw_input("Senha (nome novo cria a conta):", stars, bx, y, s.typing_pass)
+		text("Enter para zarpar  -  Tab troca de campo", bx, y, 20, COLOR_ACCENT)
+	} else {
+		text("Enter para zarpar", bx, y, 20, COLOR_ACCENT)
 	}
-	y += 48
-	text("Enter para zarpar", bx, y, 20, COLOR_ACCENT)
 	y += 34
 	if s.join_message != "" do text(s.join_message, bx, y, 20, {255, 140, 120, 255})
 
