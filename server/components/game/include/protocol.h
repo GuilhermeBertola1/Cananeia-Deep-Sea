@@ -6,8 +6,10 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 1
+#define PROTOCOL_VERSION 2
 #define NAME_MAX_LEN 16
+#define PASSWORD_MIN_LEN 4
+#define PASSWORD_MAX_LEN 32
 
 // Cliente -> servidor
 enum {
@@ -28,7 +30,7 @@ enum {
     S_PRICES = 0x88,  // u16 centavos[FISH_COUNT]
 };
 
-enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4 };
+enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4, ERR_BAD_PASSWORD = 5, ERR_WRONG_PASSWORD = 6 };
 enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_WELCOME = 5 };
 enum { MARK_SCHOOL = 1 };
 enum { STATE_AT_DOCK = 1 << 0 };

@@ -3,6 +3,7 @@
 #include "fish.h"
 #include "protocol.h"
 #include "storage.h"
+#include "password.h"
 
 #define MAX_SCHOOLS 70
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
@@ -371,6 +372,13 @@ static int valid_name(const uint8_t *name, size_t len) {
     return letters > 0;
 }
 
+static int valid_password(const uint8_t *pass, size_t len) {
+    if (len < PASSWORD_MIN_LEN || len > PASSWORD_MAX_LEN) return 0;
+    for (size_t i = 0; i < len; i++)
+        if (pass[i] < 32 || pass[i] > 126) return 0;
+    return 1;
+}
+
 static void join(int slot, const uint8_t *data, size_t len) {
     if (len < 2 || data[0] != PROTOCOL_VERSION) { send_error(slot, ERR_VERSION); return; }
     size_t name_len = data[1];
@@ -378,6 +386,13 @@ static void join(int slot, const uint8_t *data, size_t len) {
     char name[NAME_MAX_LEN + 1];
     memcpy(name, data + 2, name_len);
     name[name_len] = 0;
+
+    const uint8_t *pass = data + 2 + name_len + 1;
+    size_t pass_len = len > 2 + name_len ? data[2 + name_len] : 0;
+    if (len < 3 + name_len + pass_len || !valid_password(pass, pass_len)) {
+        send_error(slot, ERR_BAD_PASSWORD);
+        return;
+    }
 
     int index = -1, free_index = -1;
     for (int i = 0; i < MAX_PROFILES; i++) {
@@ -388,15 +403,27 @@ static void join(int slot, const uint8_t *data, size_t len) {
             break;
         }
     }
-    if (index >= 0 && profile_online(index)) { send_error(slot, ERR_NAME_ONLINE); return; }
-    if (index < 0) {
+    uint8_t hash[PASSWORD_HASH_LEN];
+    if (index >= 0) {
+        // Perfil existe: a senha precisa bater. Confere antes de dizer se
+        // está online, para quem não sabe a senha não descobrir nada.
+        profile_t *pr = &g.profiles[index];
+        if (!password_hash(pass, pass_len, pr->salt, hash) || !password_equal(hash, pr->pass_hash)) {
+            send_error(slot, ERR_WRONG_PASSWORD);
+            return;
+        }
+        if (profile_online(index)) { send_error(slot, ERR_NAME_ONLINE); return; }
+    } else {
+        // Nome novo: cria o perfil com esta senha.
         if (free_index < 0) { send_error(slot, ERR_FULL); return; }
+        profile_t pr = {.used = 1};
+        memcpy(pr.name, name, name_len + 1);
+        password_random(pr.salt, PASSWORD_SALT_LEN);
+        if (!password_hash(pass, pass_len, pr.salt, pr.pass_hash)) { send_error(slot, ERR_BAD_PASSWORD); return; }
         index = free_index;
-        g.profiles[index] = (profile_t){.used = 1};
-        memcpy(g.profiles[index].name, name, name_len + 1);
+        g.profiles[index] = pr;
         storage_save(index, &g.profiles[index]);
     }
-
     player_t *p = &g.players[slot];
     *p = (player_t){
         .state = SLOT_PLAYING,
