@@ -13,6 +13,9 @@
 #define BASE_SPEED 5 // células por segundo
 #define MAX_SPEED 16
 #define BASE_HP 100
+#define CRASH_MIN_SPEED 4
+#define CRASH_DAMAGE 2
+#define BROKEN_SPEED 2
 #define CHEST_PER_MILLE 4
 #define SAVE_EVERY (30 * TICK_HZ)
 #define RANK_SIZE 10
@@ -35,6 +38,7 @@ typedef struct {
     uint8_t speed;       // velocidade máxima, células por segundo
     uint8_t vel;         // velocidade agora: sobe até `speed` e cai devagar
     uint8_t move_budget; // em décimos de célula
+    uint8_t blocked;
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
 } player_t;
@@ -78,6 +82,12 @@ static tile_t tile(int32_t x, int32_t y) {
 static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
 static int level(const profile_t *pr, int part) {
     return pr->boat[part] < BOAT_LEVELS ? pr->boat[part] : BOAT_LEVELS - 1;
+}
+
+static int hp_max(const player_t *p) { return p->stats[STAT_HP] > 1 ? p->stats[STAT_HP] : 1; }
+static int hp(const player_t *p) {
+    int h = hp_max(p) - prof(p)->damage;
+    return h > 0 ? h : 0;
 }
 
 static int hold_count(const player_t *p) {
@@ -292,6 +302,7 @@ static void update_stats(player_t *p) {
         for (int s = 0; s < STAT_COUNT; s++) p->stats[s] += info.stats[s];
     }
     int speed = p->stats[STAT_SPEED];
+    if (hp(p) == 0 && speed > BROKEN_SPEED) speed = BROKEN_SPEED;
     p->speed = (uint8_t)(speed < 1 ? 1 : speed > MAX_SPEED ? MAX_SPEED : speed);
 }
 
@@ -434,6 +445,21 @@ static int try_move(player_t *p) {
     return 0;
 }
 
+static void crash(int slot) {
+    player_t *p = &g.players[slot];
+    int hit = p->vel >= CRASH_MIN_SPEED && !p->blocked && !at_dock(p);
+    int dmg = p->vel * CRASH_DAMAGE;
+    p->vel = 0;
+    p->move_budget = 0;
+    p->blocked = 1;
+    if (!hit || hp(p) == 0) return;
+    profile_t *pr = prof(p);
+    pr->damage = (uint16_t)(pr->damage + dmg > hp_max(p) ? hp_max(p) : pr->damage + dmg);
+    update_stats(p);
+    send_event(slot, EV_CRASH, FISH_NONE, (uint16_t)dmg, (uint32_t)hp(p));
+    if (hp(p) == 0) send_event(slot, EV_BROKEN, FISH_NONE, 0, 0);
+}
+
 static void update_player(int slot) {
     player_t *p = &g.players[slot];
     // Inércia: com tecla apertada acelera 1 célula/s por tick; soltou,
@@ -451,7 +477,12 @@ static void update_player(int slot) {
     p->move_budget += p->vel; // vel células/s = vel décimos por tick
     while (p->move_budget >= 10) {
         p->move_budget -= 10;
-        moved |= try_move(p);
+        if (!try_move(p)) {
+            crash(slot);
+            break;
+        }
+        moved = 1;
+        p->blocked = 0;
     }
     if (p->vel == 0) p->move_budget = 0;
     prof(p)->x = p->x;
