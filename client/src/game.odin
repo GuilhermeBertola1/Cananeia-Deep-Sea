@@ -91,6 +91,8 @@ State :: struct {
 	speed:         int,
 	at_dock:       bool,
 	hold:          [FISH_COUNT]int,
+	bag:           [BAG_SIZE]Item,
+	stats:         [STAT_COUNT]int, // do barco: base + itens equipados
 	online:        int,
 	tick:          u32,
 	input_dx:      i8,
@@ -111,6 +113,9 @@ State :: struct {
 
 	// interface
 	shop_open:     bool,
+	inv_open:      bool,
+	inv_cursor:    int,
+	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
 	big_map:       bool,
 	log:           [LOG_SIZE]Log_Line,
 	log_count:     int,
@@ -159,6 +164,7 @@ update :: proc() {
 		draw_world()
 		draw_hud()
 		if s.shop_open do draw_shop()
+		if s.inv_open do draw_inventory()
 		if s.big_map do draw_big_map()
 	}
 	rl.EndDrawing()
@@ -221,8 +227,14 @@ start_offline :: proc() {
 
 @(private = "file")
 update_playing :: proc() {
+	if rl.IsKeyPressed(.I) {
+		s.inv_open = !s.inv_open
+		s.shop_open = false
+		s.discard_armed = false
+	}
+	if s.inv_open do update_inventory()
 	dx, dy: i8
-	if !s.shop_open {
+	if !s.shop_open && !s.inv_open {
 		if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) do dx -= 1
 		if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) do dx += 1
 		if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) do dy -= 1
@@ -235,7 +247,7 @@ update_playing :: proc() {
 	if s.offline do offline_move(dx, dy)
 
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
-	if rl.IsKeyPressed(.E) {
+	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open {
 			s.shop_open = false
 		} else if s.at_dock {
@@ -247,6 +259,7 @@ update_playing :: proc() {
 	if rl.IsKeyPressed(.ESCAPE) {
 		s.shop_open = false
 		s.big_map = false
+		s.inv_open = false
 	}
 	if s.shop_open {
 		for i in 0 ..< FISH_COUNT {
@@ -255,6 +268,27 @@ update_playing :: proc() {
 		if rl.IsKeyPressed(.T) do send_sell(FISH_NONE)
 	}
 	if !s.at_dock do s.shop_open = false
+}
+
+// Inventário aberto: W/S escolhem o item, Enter equipa, X duas vezes joga fora.
+@(private = "file")
+update_inventory :: proc() {
+	step := 0
+	if rl.IsKeyPressed(.W) || rl.IsKeyPressed(.UP) || rl.IsKeyPressedRepeat(.W) || rl.IsKeyPressedRepeat(.UP) do step = -1
+	if rl.IsKeyPressed(.S) || rl.IsKeyPressed(.DOWN) || rl.IsKeyPressedRepeat(.S) || rl.IsKeyPressedRepeat(.DOWN) do step = 1
+	if step != 0 {
+		s.inv_cursor = (s.inv_cursor + step + BAG_SIZE) % BAG_SIZE
+		s.discard_armed = false
+	}
+	if s.bag[s.inv_cursor].base == ITEM_NONE {
+		s.discard_armed = false
+		return
+	}
+	if rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.SPACE) do send_equip(u8(s.inv_cursor))
+	if rl.IsKeyPressed(.X) {
+		if s.discard_armed do send_discard(u8(s.inv_cursor))
+		s.discard_armed = !s.discard_armed
+	}
 }
 
 // Sem servidor, o próprio cliente anda com o barco (mesma regra do servidor).
@@ -329,6 +363,7 @@ on_net_close :: proc() {
 	s.net = .Closed
 	s.screen = .Join
 	s.shop_open = false
+	s.inv_open = false
 	s.input_dx, s.input_dy = 0, 0
 	s.join_message = "Conexão perdida. Aperte Enter para tentar de novo."
 }
@@ -402,6 +437,12 @@ on_net_message :: proc(data: []u8) {
 			add_log("Lojista: \"Não tem nada disso no seu porão, marujo.\"")
 		case EV_WELCOME:
 			add_log("Bem-vindo, %s! No cais (H), aperte E para falar com o lojista (L).", s.players[s.my_id].name)
+		case EV_ITEM:
+			// No baú, `species` é o tipo do item e `count` a raridade.
+			add_popup(rarity_color(u8(count)), "Baú! %s", item_name(u8(species)))
+			add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
+		case EV_BAG_FULL:
+			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
 		}
 
 	case S_RANK:
@@ -428,6 +469,22 @@ on_net_message :: proc(data: []u8) {
 
 	case S_PRICES:
 		for &p in s.prices do p = int(read_u16(&r))
+	
+
+	case S_INVENTORY:
+		// Lê tudo numa cópia e só troca se a mensagem veio inteira.
+		n := int(read_u8(&r))
+		bag: [BAG_SIZE]Item
+		for i in 0 ..< n {
+			it := Item{base = read_u8(&r), rarity = read_u8(&r), equipped = read_u8(&r)}
+			for &a in it.affix do a = read_u8(&r)
+			for &v in it.stats do v = int(read_i16(&r))
+			if i < BAG_SIZE do bag[i] = it
+		}
+		stats: [STAT_COUNT]int
+		for &v in stats do v = int(read_i16(&r))
+		if !r.ok do return
+		s.bag, s.stats = bag, stats
 	}
 }
 

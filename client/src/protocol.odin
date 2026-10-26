@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 2
+PROTOCOL_VERSION :: 3
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -12,6 +12,8 @@ PASSWORD_MAX_LEN :: 32
 C_JOIN :: 0x01
 C_INPUT :: 0x02
 C_SELL :: 0x03
+C_EQUIP :: 0x04
+C_DISCARD :: 0x05
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -22,6 +24,7 @@ S_EVENT :: 0x85
 S_RANK :: 0x86
 S_MARKS :: 0x87
 S_PRICES :: 0x88
+S_INVENTORY :: 0x89
 
 ERR_BAD_NAME :: 1
 ERR_NAME_ONLINE :: 2
@@ -35,6 +38,8 @@ EV_SOLD :: 2
 EV_HOLD_FULL :: 3
 EV_NOTHING_TO_SELL :: 4
 EV_WELCOME :: 5
+EV_ITEM :: 6
+EV_BAG_FULL :: 7
 
 MARK_SCHOOL :: 1
 STATE_AT_DOCK :: 1 << 0
@@ -57,6 +62,10 @@ read_u8 :: proc(r: ^Reader) -> u8 {
 read_u16 :: proc(r: ^Reader) -> u16 {
 	lo := u16(read_u8(r))
 	return lo | u16(read_u8(r)) << 8
+}
+
+read_i16 :: proc(r: ^Reader) -> i16 {
+	return i16(read_u16(r)) // mesmos 16 bits, lidos com sinal
 }
 
 read_u32 :: proc(r: ^Reader) -> u32 {
@@ -92,5 +101,15 @@ send_input :: proc(dx, dy: i8) {
 
 send_sell :: proc(species: u8) {
 	buf := [2]u8{C_SELL, species}
+	net_send(buf[:])
+}
+
+send_equip :: proc(bag_index: u8) {
+	buf := [2]u8{C_EQUIP, bag_index}
+	net_send(buf[:])
+}
+
+send_discard :: proc(bag_index: u8) {
+	buf := [2]u8{C_DISCARD, bag_index}
 	net_send(buf[:])
 }

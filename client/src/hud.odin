@@ -114,7 +114,7 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
-	text("WASD/setas navega  E lojista  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
+	text("WASD/setas navega  E lojista  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
 	if s.at_dock && !s.shop_open {
@@ -124,6 +124,7 @@ draw_hud :: proc() {
 		rl.DrawRectangleV({tx - 10, 8}, {w + 20, 30}, {0, 0, 0, 170})
 		text(tip, tx, 13, 20, COLOR_ACCENT)
 	}
+
 }
 
 // Diário de bordo no canto de baixo, sumindo com o tempo.
@@ -184,6 +185,77 @@ draw_shop :: proc() {
 	text(fmt.tprintf("[T] Vender tudo por %s", money_text(total)), cx, cy, 20, COLOR_ACCENT)
 	cy += 30
 	text("Número vende a espécie.  E ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
+}
+
+// --- inventário -----------------------------------------------------------------
+
+draw_inventory :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 760
+	h: f32 = 100 + BAG_SIZE * 26
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	text("INVENTÁRIO", cx, y + 16, 20, COLOR_ACCENT)
+
+	// Lista da bolsa à esquerda. * = equipado.
+	list_w: f32 = 400
+	row_y := y + 52
+	for it, i in s.bag {
+		if i == s.inv_cursor do rl.DrawRectangleV({cx - 8, row_y - 3}, {list_w, 26}, {255, 255, 255, 28})
+		if it.base == ITEM_NONE {
+			text(fmt.tprintf("%2d   -", i + 1), cx, row_y, 20, COLOR_QUIET)
+		} else {
+			mark := "*" if it.equipped != 0 else " "
+			text(fmt.tprintf("%2d %s %s", i + 1, mark, item_name(it.base)), cx, row_y, 20, rarity_color(it.rarity))
+			if it.equipped != 0 {
+				slot := EQUIP_NAMES[it.equipped] if int(it.equipped) < len(EQUIP_NAMES) else "?"
+				text(slot, cx + list_w - 20 - text_width(slot, 20), row_y, 20, COLOR_ACCENT)
+			}
+		}
+		row_y += 26
+	}
+
+	// Detalhes do item escolhido à direita.
+	dx := cx + list_w + 20
+	dy := y + 52
+	sel := s.bag[s.inv_cursor]
+	if sel.base == ITEM_NONE {
+		text("Slot vazio", dx, dy, 20, COLOR_QUIET)
+	} else {
+		text(item_name(sel.base), dx, dy, 20, rarity_color(sel.rarity))
+		dy += 24
+		text(rarity_name(sel.rarity), dx, dy, 20, rarity_color(sel.rarity))
+		dy += 32
+		for v, st in sel.stats {
+			if v == 0 do continue
+			text(fmt.tprintf("%+d%s %s", v, STAT_UNITS[st], STAT_NAMES[st]), dx, dy, 20, COLOR_INK)
+			dy += 24
+		}
+		for a in sel.affix {
+			if a == AFFIX_NONE do continue
+			text(fmt.tprintf("[%s]", affix_name(a)), dx, dy, 20, COLOR_QUIET)
+			dy += 24
+		}
+	}
+
+	// Total do barco embaixo, à direita.
+	dy = y + h - 44 - STAT_COUNT * 24 - 28
+	text("SEU BARCO", dx, dy, 20, COLOR_QUIET)
+	dy += 28
+	for v, st in s.stats {
+		text(fmt.tprintf("%s: %d%s", STAT_NAMES[st], v, STAT_UNITS[st]), dx, dy, 20, COLOR_INK)
+		dy += 24
+	}
+
+	if s.discard_armed {
+		text("Aperte X de novo para jogar fora. Não tem volta!", cx, y + h - 30, 20, {255, 140, 120, 255})
+	} else {
+		text("W/S escolhe  Enter equipa/tira  X joga fora  I fecha", cx, y + h - 30, 20, COLOR_QUIET)
+	}
 }
 
 draw_big_map :: proc() {
