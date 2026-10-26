@@ -114,7 +114,7 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
-	text("WASD/setas navega  E lojista  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
+	text("WASD/setas navega  E lojista  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
 	if s.at_dock && !s.shop_open {
@@ -124,6 +124,7 @@ draw_hud :: proc() {
 		rl.DrawRectangleV({tx - 10, 8}, {w + 20, 30}, {0, 0, 0, 170})
 		text(tip, tx, 13, 20, COLOR_ACCENT)
 	}
+
 }
 
 // Diário de bordo no canto de baixo, sumindo com o tempo.
@@ -186,6 +187,77 @@ draw_shop :: proc() {
 	text("Número vende a espécie.  E ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
 }
 
+// --- inventário -----------------------------------------------------------------
+
+draw_inventory :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 760
+	h: f32 = 100 + BAG_SIZE * 26
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	text("INVENTÁRIO", cx, y + 16, 20, COLOR_ACCENT)
+
+	// Lista da bolsa à esquerda. * = equipado.
+	list_w: f32 = 400
+	row_y := y + 52
+	for it, i in s.bag {
+		if i == s.inv_cursor do rl.DrawRectangleV({cx - 8, row_y - 3}, {list_w, 26}, {255, 255, 255, 28})
+		if it.base == ITEM_NONE {
+			text(fmt.tprintf("%2d   -", i + 1), cx, row_y, 20, COLOR_QUIET)
+		} else {
+			mark := "*" if it.equipped != 0 else " "
+			text(fmt.tprintf("%2d %s %s", i + 1, mark, item_name(it.base)), cx, row_y, 20, rarity_color(it.rarity))
+			if it.equipped != 0 {
+				slot := EQUIP_NAMES[it.equipped] if int(it.equipped) < len(EQUIP_NAMES) else "?"
+				text(slot, cx + list_w - 20 - text_width(slot, 20), row_y, 20, COLOR_ACCENT)
+			}
+		}
+		row_y += 26
+	}
+
+	// Detalhes do item escolhido à direita.
+	dx := cx + list_w + 20
+	dy := y + 52
+	sel := s.bag[s.inv_cursor]
+	if sel.base == ITEM_NONE {
+		text("Slot vazio", dx, dy, 20, COLOR_QUIET)
+	} else {
+		text(item_name(sel.base), dx, dy, 20, rarity_color(sel.rarity))
+		dy += 24
+		text(rarity_name(sel.rarity), dx, dy, 20, rarity_color(sel.rarity))
+		dy += 32
+		for v, st in sel.stats {
+			if v == 0 do continue
+			text(fmt.tprintf("%+d%s %s", v, STAT_UNITS[st], STAT_NAMES[st]), dx, dy, 20, COLOR_INK)
+			dy += 24
+		}
+		for a in sel.affix {
+			if a == AFFIX_NONE do continue
+			text(fmt.tprintf("[%s]", affix_name(a)), dx, dy, 20, COLOR_QUIET)
+			dy += 24
+		}
+	}
+
+	// Total do barco embaixo, à direita.
+	dy = y + h - 44 - STAT_COUNT * 24 - 28
+	text("SEU BARCO", dx, dy, 20, COLOR_QUIET)
+	dy += 28
+	for v, st in s.stats {
+		text(fmt.tprintf("%s: %d%s", STAT_NAMES[st], v, STAT_UNITS[st]), dx, dy, 20, COLOR_INK)
+		dy += 24
+	}
+
+	if s.discard_armed {
+		text("Aperte X de novo para jogar fora. Não tem volta!", cx, y + h - 30, 20, {255, 140, 120, 255})
+	} else {
+		text("W/S escolhe  Enter equipa/tira  X joga fora  I fecha", cx, y + h - 30, 20, COLOR_QUIET)
+	}
+}
+
 draw_big_map :: proc() {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	rl.DrawRectangleV({0, 0}, {sw, sh}, {0, 0, 0, 160})
@@ -206,6 +278,20 @@ LOGO := [?]string {
 	`~~~~ \_________/ ~~~~~~~~~~~~~~~~~~~~~~~~~~`,
 }
 
+@(private = "file")
+draw_input :: proc(label, value: string, x, y: f32, focused: bool) -> f32 {
+	text(label, x, y, 20, COLOR_QUIET)
+	box_y := y + 28
+	rl.DrawRectangleV({x, box_y}, {340, 34}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, box_y, 340, 34}, 2, COLOR_ACCENT if focused else COLOR_QUIET)
+	text(value, x + 10, box_y + 7, 20, COLOR_INK)
+	if focused && int(rl.GetTime() * 2) % 2 == 0 {
+		cx := x + 12 + text_width(value, 20)
+		rl.DrawRectangleV({cx, box_y + 7}, {10, 20}, COLOR_ACCENT)
+	}
+	return box_y + 48
+}
+
 draw_join :: proc() {
 	sw, sh := rl.GetScreenWidth(), rl.GetScreenHeight()
 	cols := sw / CELL_W
@@ -220,18 +306,14 @@ draw_join :: proc() {
 
 	y := f32((top + 7) * CELL_H)
 	bx := f32(sw) / 2 - 170
-	text("Nome do capitão:", bx, y, 20, COLOR_QUIET)
-	y += 28
-	rl.DrawRectangleV({bx, y}, {340, 34}, COLOR_PANEL)
-	rl.DrawRectangleLinesEx({bx, y, 340, 34}, 2, COLOR_ACCENT)
-	name := string(s.name_buf[:s.name_len])
-	text(name, bx + 10, y + 7, 20, COLOR_INK)
-	if int(rl.GetTime() * 2) % 2 == 0 {
-		cx := bx + 12 + text_width(name, 20)
-		rl.DrawRectangleV({cx, y + 7}, {10, 20}, COLOR_ACCENT)
+	y = draw_input("Nome do capitão:", string(s.name_buf[:s.name_len]), bx, y, !s.typing_pass)
+	if s.url != "" {
+		stars := strings.repeat("*", s.pass_len, context.temp_allocator)
+		y = draw_input("Senha (nome novo cria a conta):", stars, bx, y, s.typing_pass)
+		text("Enter para zarpar  -  Tab troca de campo", bx, y, 20, COLOR_ACCENT)
+	} else {
+		text("Enter para zarpar", bx, y, 20, COLOR_ACCENT)
 	}
-	y += 48
-	text("Enter para zarpar", bx, y, 20, COLOR_ACCENT)
 	y += 34
 	if s.join_message != "" do text(s.join_message, bx, y, 20, {255, 140, 120, 255})
 

@@ -3,9 +3,17 @@
 #pragma once
 #include <stdint.h>
 #include "fish.h"
+#include "password.h"
+#include "items.h"
 #include "protocol.h"
 
 #define MAX_PROFILES 256
+#define BAG_SIZE 12
+// Slots do barco: 0 arma, 1 ferramenta de pesca, 2 a 4 boosts.
+#define EQUIP_SLOTS 5
+#define EQUIP_WEAPON 0
+#define EQUIP_TOOL 1
+#define EQUIP_BOOST 2
 
 typedef struct {
     char name[NAME_MAX_LEN + 1];
@@ -13,6 +21,10 @@ typedef struct {
     uint32_t money; // em centavos
     uint16_t hold[FISH_COUNT];
     uint16_t x, y; // onde parou (0, 0 = nascer no porto)
+    uint8_t salt[PASSWORD_SALT_LEN];      // aleatório, um por perfil
+    uint8_t pass_hash[PASSWORD_HASH_LEN]; // PBKDF2(senha, sal): a senha mesmo nunca é guardada
+    item_t bag[BAG_SIZE];
+    uint8_t equipped[EQUIP_SLOTS];
 } profile_t;
 
 // Carrega todos os perfis salvos em `out` (zerado antes). Devolve quantos achou.

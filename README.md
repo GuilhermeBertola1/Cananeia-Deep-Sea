@@ -19,9 +19,10 @@ O protótipo antigo em TypeScript está no branch `prototipo-ts`.
 | E | falar com o lojista (no cais `H`) |
 | 1 a 9 / T | vender uma espécie / vender tudo (na loja) |
 | M | mapa grande |
+| I | inventário: W/S escolhe, Enter equipa ou tira, X duas vezes joga fora |
 | Esc | fechar janela |
 
-Você pesca sozinho enquanto navega. Dentro de um cardume (`><`) pesca muito mais. Mar fundo paga melhor. O preço cai quando muita gente vende a mesma espécie e volta com o tempo.
+Você pesca sozinho enquanto navega. Dentro de um cardume (`><`) pesca muito mais. Mar fundo paga melhor. O preço cai quando muita gente vende a mesma espécie e volta com o tempo. Às vezes vem um baú com um item: rede melhor pesca mais rápido, motor deixa o barco mais veloz, amuleto traz mais baús. Cada capitão entra com nome e senha.
 
 ## Estrutura
 

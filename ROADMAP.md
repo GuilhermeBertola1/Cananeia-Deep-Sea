@@ -20,8 +20,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | --- | --- | --- |
 | v0.1 | Protótipo TypeScript (branch `prototipo-ts`) | Pronta |
 | v0.2 | Nova base: Odin/WASM + ESP32-S3, mapa, rede binária, pesca, cardumes, lojista, ranking | Pronta |
-| v0.3 | Contas com senha, inventário e itens procedurais | Próxima |
-| v0.4 | Upgrades do barco | |
+| v0.3 | Contas com senha, inventário e itens procedurais | Pronta |
+| v0.4 | Upgrades do barco | Próxima |
 | v0.5 | Armas, PvP, morte e drops (bag e coroa) | |
 | v0.6 | Sereia, mercenário e mecânico | |
 | v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | |
@@ -42,17 +42,18 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 - [x] Ranking por dinheiro (online e offline), perfis salvos por nome
 - [x] Servidor no ESP32-S3 servindo o cliente pela flash
 
-## v0.3: Contas, inventário e itens procedurais
+## v0.3: Contas, inventário e itens procedurais (pronta)
 
 **Objetivo:** cada item é único e muda o jeito de jogar; ninguém entra com o nome dos outros.
 
-- [ ] Senha no perfil: `C_JOIN` manda a senha, o servidor guarda só o hash (PBKDF2 do mbedTLS no ESP32)
-- [ ] Itens-base (arpão, rede, motor a vapor...) com faixa de stats, numa tabela em `components/game/items.c`
-- [ ] Gerador procedural no servidor: raridade (comum 70%, raro 22%, épico 7%, lendário 1%) + 0 a 3 afixos; o item é guardado só como `semente + tipo` (pouca memória)
-- [ ] Inventário com slots: 1 arma, 1 ferramenta de pesca, 3 boosts
-- [ ] Stats somados no barco: velocidade, vida, dano, produção, sorte
-- [ ] Mensagens novas: `S_INVENTORY`, `C_EQUIP`
-- [ ] Tela de inventário (tecla I) no cliente
+- [x] Senha no perfil: `C_JOIN` manda a senha, o servidor guarda só o hash (PBKDF2 do mbedTLS no ESP32)
+- [x] Itens-base (arpão, rede, motor a vapor...) com faixa de stats, numa tabela em `components/game/items.c`
+- [x] Gerador procedural no servidor: raridade (comum 70%, raro 22%, épico 7%, lendário 1%) + 0 a 3 afixos; o item é guardado só como `semente + tipo` (pouca memória)
+- [x] Inventário com slots: 1 arma, 1 ferramenta de pesca, 3 boosts
+- [x] Stats somados no barco: velocidade, vida, dano, produção, sorte
+- [x] Mensagens novas: `S_INVENTORY`, `C_EQUIP`, `C_DISCARD`
+- [x] Tela de inventário (tecla I) no cliente
+- [x] Baú com item aleatório na pesca (sorte aumenta a chance)
 
 **Pronta quando:** dois jogadores com itens diferentes pescam em ritmos visivelmente diferentes.
 

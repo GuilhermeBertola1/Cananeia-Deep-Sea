@@ -1,0 +1,65 @@
+package game
+
+import rl "vendor:raylib"
+
+// Mesmas tabelas de server/components/game/items.c. A ordem é o id na rede.
+// Só os nomes: os números de cada item já chegam prontos do servidor.
+
+BAG_SIZE :: 12
+STAT_COUNT :: 5
+MAX_AFFIXES :: 3
+AFFIX_NONE :: 0xFF
+ITEM_NONE :: 0
+
+Item :: struct {
+	base:     u8, // ITEM_NONE = slot vazio
+	rarity:   u8,
+	equipped: u8, // 0 = não; 1 arma, 2 ferramenta, 3 a 5 boosts
+	affix:    [MAX_AFFIXES]u8,
+	stats:    [STAT_COUNT]int,
+}
+
+ITEM_NAMES := [?]string {
+	"",
+	"Arpão",
+	"Mosquete",
+	"Canhão leve",
+	"Vara de bambu",
+	"Rede de pesca",
+	"Rede de arrasto",
+	"Motor a vapor",
+	"Casco reforçado",
+	"Amuleto de búzios",
+	"Isca encantada",
+}
+
+AFFIX_NAMES := [?]string{"Veloz", "Robusto", "Afiado", "do Pescador", "da Sorte"}
+
+STAT_NAMES := [STAT_COUNT]string{"Velocidade", "Vida", "Dano", "Produção", "Sorte"}
+STAT_UNITS := [STAT_COUNT]string{"", "", "", "%", ""}
+
+RARITY_NAMES := [?]string{"comum", "raro", "épico", "lendário"}
+RARITY_COLORS := [?]rl.Color {
+	{215, 227, 244, 255}, // comum: branco
+	{90, 170, 255, 255}, // raro: azul
+	{199, 125, 255, 255}, // épico: roxo
+	{255, 170, 60, 255}, // lendário: laranja
+}
+
+EQUIP_NAMES := [?]string{"", "arma", "ferramenta", "boost", "boost", "boost"}
+
+item_name :: proc(base: u8) -> string {
+	return ITEM_NAMES[base] if int(base) < len(ITEM_NAMES) else "?"
+}
+
+affix_name :: proc(id: u8) -> string {
+	return AFFIX_NAMES[id] if int(id) < len(AFFIX_NAMES) else "?"
+}
+
+rarity_name :: proc(r: u8) -> string {
+	return RARITY_NAMES[r] if int(r) < len(RARITY_NAMES) else "?"
+}
+
+rarity_color :: proc(r: u8) -> rl.Color {
+	return RARITY_COLORS[r] if int(r) < len(RARITY_COLORS) else COLOR_INK
+}

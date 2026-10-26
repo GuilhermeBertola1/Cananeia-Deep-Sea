@@ -3,12 +3,17 @@
 #include "fish.h"
 #include "protocol.h"
 #include "storage.h"
+#include "items.h"
+#include "password.h"
 
 #define MAX_SCHOOLS 70
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
 #define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
 #define BASE_CAPACITY 150
 #define BASE_SPEED 5 // células por segundo
+#define MAX_SPEED 12
+#define BASE_HP 100
+#define CHEST_PER_MILLE 4
 #define SAVE_EVERY (30 * TICK_HZ)
 #define RANK_SIZE 10
 
@@ -28,6 +33,7 @@ typedef struct {
     uint8_t speed;       // células por segundo
     uint8_t move_budget; // em décimos de célula
     uint16_t capacity;
+    int16_t stats[STAT_COUNT];
 } player_t;
 
 typedef struct {
@@ -59,7 +65,7 @@ static uint32_t rnd(void) {
     return g.rng = x;
 }
 static uint32_t rnd_below(uint32_t n) { return rnd() % n; }
-static int chance(uint32_t pct) { return rnd_below(100) < pct; }
+static int chance_permille(uint32_t pm) { return rnd_below(1000) < pm; }
 
 static tile_t tile(int32_t x, int32_t y) {
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
@@ -155,6 +161,33 @@ static void send_marks(int slot) {
     slot < 0 ? send_all(&w) : send_w(slot, &w);
 }
 
+// Em que slot do barco o item da bolsa está (0 = não está equipado).
+static uint8_t equipped_slot(const profile_t *pr, int bag_index) {
+    for (int e = 0; e < EQUIP_SLOTS; e++)
+        if (pr->equipped[e] == bag_index + 1) return (uint8_t)(e + 1);
+    return 0;
+}
+
+// O servidor manda o item já "aberto" (raridade, afixos, números), então o
+// cliente não precisa rodar o gerador.
+static void send_inventory(int slot) {
+    const player_t *p = &g.players[slot];
+    const profile_t *pr = prof(p);
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_INVENTORY);
+    put_u8(&w, BAG_SIZE);
+    for (int i = 0; i < BAG_SIZE; i++) {
+        item_info_t info = item_info(pr->bag[i]);
+        put_u8(&w, info.base);
+        put_u8(&w, info.rarity);
+        put_u8(&w, equipped_slot(pr, i));
+        for (int a = 0; a < MAX_AFFIXES; a++) put_u8(&w, info.affix[a]);
+        for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, info.stats[s]);
+    }
+    for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, p->stats[s]);
+    send_w(slot, &w);
+}
+
 static int profile_online(int index) {
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING && g.players[i].profile == index) return 1;
@@ -240,6 +273,76 @@ static void send_state(int slot) {
 
 // --- regras -----------------------------------------------------------------
 
+// Stats do barco = base + tudo o que está equipado.
+static void update_stats(player_t *p) {
+    const profile_t *pr = prof(p);
+    memset(p->stats, 0, sizeof p->stats);
+    p->stats[STAT_SPEED] = BASE_SPEED;
+    p->stats[STAT_HP] = BASE_HP;
+    for (int e = 0; e < EQUIP_SLOTS; e++) {
+        if (!pr->equipped[e]) continue;
+        item_info_t info = item_info(pr->bag[pr->equipped[e] - 1]);
+        for (int s = 0; s < STAT_COUNT; s++) p->stats[s] += info.stats[s];
+    }
+    int speed = p->stats[STAT_SPEED];
+    p->speed = (uint8_t)(speed < 1 ? 1 : speed > MAX_SPEED ? MAX_SPEED : speed);
+}
+
+// Item novo na bolsa. Devolve o índice, ou -1 se a bolsa está cheia.
+static int bag_add(profile_t *pr, item_t item) {
+    for (int i = 0; i < BAG_SIZE; i++) {
+        if (pr->bag[i].base == ITEM_NONE) {
+            pr->bag[i] = item;
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Baú: um item aleatório de qualquer tipo.
+static void give_random_item(int slot) {
+    player_t *p = &g.players[slot];
+    item_t item = item_new((uint8_t)(1 + rnd_below(ITEM_BASE_COUNT - 1)), rnd());
+    if (bag_add(prof(p), item) < 0) {
+        send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0);
+        return;
+    }
+    send_event(slot, EV_ITEM, item.base, item_info(item).rarity, 0);
+    send_inventory(slot);
+}
+
+static void equip(int slot, uint8_t index) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (index >= BAG_SIZE || pr->bag[index].base == ITEM_NONE) return;
+    uint8_t current = equipped_slot(pr, index);
+    if (current) {
+        pr->equipped[current - 1] = 0; // já estava: desequipa
+    } else {
+        uint8_t kind = ITEM_BASES[pr->bag[index].base].kind;
+        int e = kind == KIND_WEAPON ? EQUIP_WEAPON : kind == KIND_TOOL ? EQUIP_TOOL : EQUIP_BOOST;
+        if (kind == KIND_BOOST) {
+            // Boost vai no primeiro slot livre; com os 3 ocupados, troca o primeiro.
+            for (int b = EQUIP_BOOST; b < EQUIP_SLOTS; b++)
+                if (!pr->equipped[b]) { e = b; break; }
+        }
+        pr->equipped[e] = index + 1;
+    }
+    update_stats(p);
+    send_inventory(slot);
+}
+
+static void discard(int slot, uint8_t index) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (index >= BAG_SIZE || pr->bag[index].base == ITEM_NONE) return;
+    uint8_t current = equipped_slot(pr, index);
+    if (current) pr->equipped[current - 1] = 0;
+    pr->bag[index] = (item_t){0};
+    update_stats(p);
+    send_inventory(slot);
+}
+
 static void find_spawn(player_t *p) {
     for (int i = 0; i < 200; i++) {
         int dx = (int)rnd_below(31) - 15, dy = (int)rnd_below(31) - 15;
@@ -265,6 +368,8 @@ static void add_fish(int slot, uint8_t species, int n) {
     int got = n < room ? n : room;
     prof(p)->hold[species] += got;
     send_event(slot, EV_CATCH, species, (uint16_t)got, 0);
+    int luck = p->stats[STAT_LUCK] > 0 ? p->stats[STAT_LUCK] : 0;
+    if (chance_permille(CHEST_PER_MILLE + (uint32_t)luck)) give_random_item(slot);
 }
 
 static void sell(int slot, uint8_t species) {
@@ -316,14 +421,18 @@ static void update_player(int slot) {
     prof(p)->x = p->x;
     prof(p)->y = p->y;
 
-    if (moved && chance(PASSIVE_CATCH_PCT)) {
+    // Produção = % a mais na chance de pescar. +50 de produção: 6% vira 9%.
+    int production = p->stats[STAT_PRODUCTION] > -100 ? p->stats[STAT_PRODUCTION] : -100;
+    uint32_t passive = (uint32_t)(PASSIVE_CATCH_PCT * 10 * (100 + production) / 100);
+    uint32_t school = (uint32_t)(SCHOOL_CATCH_PCT * 10 * (100 + production) / 100);
+    if (moved && chance_permille(passive)) {
         uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
         if (sp != FISH_NONE) add_fish(slot, sp, 1);
     }
     for (int i = 0; i < MAX_SCHOOLS; i++) {
         const school_t *s = &g.schools[i];
         int dx = p->x - s->x, dy = p->y - s->y;
-        if (s->alive && dx * dx + dy * dy <= s->r * s->r && chance(SCHOOL_CATCH_PCT))
+        if (s->alive && dx * dx + dy * dy <= s->r * s->r && chance_permille(school))
             add_fish(slot, s->species, 1 + (int)rnd_below(3));
     }
 }
@@ -371,6 +480,13 @@ static int valid_name(const uint8_t *name, size_t len) {
     return letters > 0;
 }
 
+static int valid_password(const uint8_t *pass, size_t len) {
+    if (len < PASSWORD_MIN_LEN || len > PASSWORD_MAX_LEN) return 0;
+    for (size_t i = 0; i < len; i++)
+        if (pass[i] < 32 || pass[i] > 126) return 0;
+    return 1;
+}
+
 static void join(int slot, const uint8_t *data, size_t len) {
     if (len < 2 || data[0] != PROTOCOL_VERSION) { send_error(slot, ERR_VERSION); return; }
     size_t name_len = data[1];
@@ -378,6 +494,13 @@ static void join(int slot, const uint8_t *data, size_t len) {
     char name[NAME_MAX_LEN + 1];
     memcpy(name, data + 2, name_len);
     name[name_len] = 0;
+
+    const uint8_t *pass = data + 2 + name_len + 1;
+    size_t pass_len = len > 2 + name_len ? data[2 + name_len] : 0;
+    if (len < 3 + name_len + pass_len || !valid_password(pass, pass_len)) {
+        send_error(slot, ERR_BAD_PASSWORD);
+        return;
+    }
 
     int index = -1, free_index = -1;
     for (int i = 0; i < MAX_PROFILES; i++) {
@@ -388,23 +511,40 @@ static void join(int slot, const uint8_t *data, size_t len) {
             break;
         }
     }
-    if (index >= 0 && profile_online(index)) { send_error(slot, ERR_NAME_ONLINE); return; }
-    if (index < 0) {
+    uint8_t hash[PASSWORD_HASH_LEN];
+    if (index >= 0) {
+        // Perfil existe: a senha precisa bater. Confere antes de dizer se
+        // está online, para quem não sabe a senha não descobrir nada.
+        profile_t *pr = &g.profiles[index];
+        if (!password_hash(pass, pass_len, pr->salt, hash) || !password_equal(hash, pr->pass_hash)) {
+            send_error(slot, ERR_WRONG_PASSWORD);
+            return;
+        }
+        if (profile_online(index)) { send_error(slot, ERR_NAME_ONLINE); return; }
+    } else {
+        // Nome novo: cria o perfil com esta senha.
         if (free_index < 0) { send_error(slot, ERR_FULL); return; }
+        profile_t pr = {.used = 1};
+        memcpy(pr.name, name, name_len + 1);
+        password_random(pr.salt, PASSWORD_SALT_LEN);
+        if (!password_hash(pass, pass_len, pr.salt, pr.pass_hash)) { send_error(slot, ERR_BAD_PASSWORD); return; }
+        item_t rod;
+        do rod = item_new(ITEM_VARA, rnd());
+        while (item_info(rod).rarity != RARITY_COMMON);
+        pr.bag[0] = rod;
+        pr.equipped[EQUIP_TOOL] = 1;
         index = free_index;
-        g.profiles[index] = (profile_t){.used = 1};
-        memcpy(g.profiles[index].name, name, name_len + 1);
+        g.profiles[index] = pr;
         storage_save(index, &g.profiles[index]);
     }
-
     player_t *p = &g.players[slot];
     *p = (player_t){
         .state = SLOT_PLAYING,
         .profile = index,
         .color = (uint8_t)rnd_below(6),
-        .speed = BASE_SPEED,
         .capacity = BASE_CAPACITY,
     };
+    update_stats(p);
     // Volta para onde parou, se ainda for água; senão nasce perto do porto.
     const profile_t *pr = &g.profiles[index];
     if ((pr->x || pr->y) && tile_is_sailable(tile(pr->x, pr->y))) {
@@ -438,6 +578,7 @@ static void join(int slot, const uint8_t *data, size_t len) {
     }
     send_prices(slot);
     send_marks(slot);
+    send_inventory(slot);
     send_rank(-1);
     send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
 }
@@ -492,6 +633,12 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
     case C_SELL:
         if (len < 2 || (data[1] >= FISH_COUNT && data[1] != FISH_NONE)) return;
         sell(slot, data[1]);
+        break;
+    case C_EQUIP:
+        if (len >= 2) equip(slot, data[1]);
+        break;
+    case C_DISCARD:
+        if (len >= 2) discard(slot, data[1]);
         break;
     }
 }
