@@ -5,13 +5,13 @@
 #include "storage.h"
 #include "items.h"
 #include "password.h"
+#include "boat.h"
 
 #define MAX_SCHOOLS 70
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
 #define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
-#define BASE_CAPACITY 150
 #define BASE_SPEED 5 // células por segundo
-#define MAX_SPEED 12
+#define MAX_SPEED 16
 #define BASE_HP 100
 #define CHEST_PER_MILLE 4
 #define SAVE_EVERY (30 * TICK_HZ)
@@ -73,6 +73,9 @@ static tile_t tile(int32_t x, int32_t y) {
 }
 
 static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
+static int level(const profile_t *pr, int part) {
+    return pr->boat[part] < BOAT_LEVELS ? pr->boat[part] : BOAT_LEVELS - 1;
+}
 
 static int hold_count(const player_t *p) {
     int n = 0;
@@ -277,8 +280,9 @@ static void send_state(int slot) {
 static void update_stats(player_t *p) {
     const profile_t *pr = prof(p);
     memset(p->stats, 0, sizeof p->stats);
-    p->stats[STAT_SPEED] = BASE_SPEED;
-    p->stats[STAT_HP] = BASE_HP;
+    p->stats[STAT_SPEED] = BASE_SPEED + SAIL_SPEED[level(pr, PART_SAIL)];
+    p->stats[STAT_HP] = BASE_HP + HULL_HP[level(pr, PART_HULL)];
+    p->capacity = HULL_CAPACITY[level(pr, PART_HULL)];
     for (int e = 0; e < EQUIP_SLOTS; e++) {
         if (!pr->equipped[e]) continue;
         item_info_t info = item_info(pr->bag[pr->equipped[e] - 1]);
@@ -542,7 +546,6 @@ static void join(int slot, const uint8_t *data, size_t len) {
         .state = SLOT_PLAYING,
         .profile = index,
         .color = (uint8_t)rnd_below(6),
-        .capacity = BASE_CAPACITY,
     };
     update_stats(p);
     // Volta para onde parou, se ainda for água; senão nasce perto do porto.
