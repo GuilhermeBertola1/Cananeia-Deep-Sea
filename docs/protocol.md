@@ -14,6 +14,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `u16` | 2 | |
 | `u32` | 4 | |
 | `nome` | 1 + n | `u8` com o tamanho e depois os bytes (até 16, ASCII) |
+| `senha` | 1 + n | igual ao `nome`, de 4 a 32 caracteres ASCII visíveis |
 | dinheiro | `u32` | sempre em **centavos** |
 
 ## Cliente → servidor
