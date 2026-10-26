@@ -28,9 +28,12 @@ typedef struct {
     slot_state_t state;
     int profile; // índice em g.profiles
     int16_t x, y;
-    int8_t dx, dy;
+    int8_t dx, dy;       // para onde o jogador quer ir (teclado)
+    uint8_t heading;     // para onde a proa aponta (0 a 7, ver DIR_X)
+    uint8_t turn_timer;  // ticks desde a última virada de 45°
     uint8_t color;
-    uint8_t speed;       // células por segundo
+    uint8_t speed;       // velocidade máxima, células por segundo
+    uint8_t vel;         // velocidade agora: sobe até `speed` e cai devagar
     uint8_t move_budget; // em décimos de célula
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
@@ -397,31 +400,60 @@ static void sell(int slot, uint8_t species) {
     send_rank(-1);
 }
 
+static const int8_t DIR_X[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+static const int8_t DIR_Y[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+static int dir_index(int dx, int dy) {
+    for (int i = 0; i < 8; i++)
+        if (DIR_X[i] == dx && DIR_Y[i] == dy) return i;
+    return -1; // parado
+}
+
+// Leme: a proa gira 45° por vez até apontar para `want`, pelo lado mais
+// curto. Leme melhor = menos ticks entre uma virada e outra.
+static void steer(player_t *p, int want) {
+    if (p->vel == 0) p->heading = (uint8_t)want; // parado, vira na hora
+    if (want == p->heading) { p->turn_timer = 0; return; }
+    if (++p->turn_timer < RUDDER_TURN_TICKS[level(prof(p), PART_RUDDER)]) return;
+    p->turn_timer = 0;
+    int diff = (want - p->heading + 8) % 8; // passos no sentido horário
+    p->heading = (uint8_t)((p->heading + (diff <= 4 ? 1 : 7)) % 8);
+}
+
 static int try_move(player_t *p) {
-    int nx = p->x + p->dx, ny = p->y + p->dy;
+    int dx = DIR_X[p->heading], dy = DIR_Y[p->heading];
+    int nx = p->x + dx, ny = p->y + dy;
     if (tile_is_sailable(tile(nx, ny))) {
         p->x = nx;
         p->y = ny;
         return 1;
     }
     // Na diagonal, desliza pela costa.
-    if (p->dx && p->dy && tile_is_sailable(tile(nx, p->y))) return p->x = nx, 1;
-    if (p->dx && p->dy && tile_is_sailable(tile(p->x, ny))) return p->y = ny, 1;
+    if (dx && dy && tile_is_sailable(tile(nx, p->y))) return p->x = nx, 1;
+    if (dx && dy && tile_is_sailable(tile(p->x, ny))) return p->y = ny, 1;
     return 0;
 }
 
 static void update_player(int slot) {
     player_t *p = &g.players[slot];
-    int moved = 0;
-    if (p->dx || p->dy) {
-        p->move_budget += p->speed; // speed células/s = speed décimos por tick
-        while (p->move_budget >= 10) {
-            p->move_budget -= 10;
-            moved |= try_move(p);
-        }
-    } else {
-        p->move_budget = 0;
+    // Inércia: com tecla apertada acelera 1 célula/s por tick; soltou,
+    // o barco desliza e perde 1 célula/s a cada 2 ticks.
+    int want = dir_index(p->dx, p->dy);
+    if (want >= 0) {
+        steer(p, want);
+        if (p->vel < p->speed) p->vel++;
+    } else if (p->vel > 0 && g.tick % 2 == 0) {
+        p->vel--;
     }
+    if (p->vel > p->speed) p->vel = p->speed; // tirou o motor, por exemplo
+
+    int moved = 0;
+    p->move_budget += p->vel; // vel células/s = vel décimos por tick
+    while (p->move_budget >= 10) {
+        p->move_budget -= 10;
+        moved |= try_move(p);
+    }
+    if (p->vel == 0) p->move_budget = 0;
     prof(p)->x = p->x;
     prof(p)->y = p->y;
 
