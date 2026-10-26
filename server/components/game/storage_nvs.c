@@ -35,10 +35,11 @@ int storage_load_all(profile_t *out, int max) {
         char key[12];
         snprintf(key, sizeof key, "p%03d", i);
         size_t size = sizeof(profile_t);
-        if (nvs_get_blob(handle, key, &out[i], &size) != ESP_OK || size != sizeof(profile_t)) {
+        if (nvs_get_blob(handle, key, &out[i], &size) != ESP_OK || size < PROFILE_V03_SIZE) {
             memset(&out[i], 0, sizeof(profile_t));
             continue;
         }
+        if (size < sizeof(profile_t)) profile_upgrade(&out[i], size);
         count += out[i].used;
     }
     ESP_LOGI(TAG, "%d perfis carregados", count);

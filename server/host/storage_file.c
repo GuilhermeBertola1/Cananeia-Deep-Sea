@@ -7,8 +7,8 @@
 static const char *PATH = "perfis.bin";
 
 // O cabeçalho guarda o tamanho de profile_t. Quando o perfil ganha um campo
-// novo, o tamanho muda, e o arquivo antigo é descartado em vez de cair com os
-// bytes nos campos errados.
+// novo no fim, o tamanho cresce: o arquivo antigo é lido com o tamanho velho,
+// os campos novos vêm zerados e o arquivo é regravado no formato novo.
 typedef struct {
     char magic[4]; // "CDS\0"
     uint32_t record_size;
@@ -16,21 +16,38 @@ typedef struct {
 
 static const header_t HEADER = {{'C', 'D', 'S', 0}, sizeof(profile_t)};
 
+static void save_all(const profile_t *profiles, int max) {
+    FILE *f = fopen(PATH, "wb");
+    if (!f) return;
+    fwrite(&HEADER, sizeof HEADER, 1, f);
+    fwrite(profiles, sizeof(profile_t), max, f);
+    fclose(f);
+}
+
 int storage_load_all(profile_t *out, int max) {
     memset(out, 0, sizeof(profile_t) * max);
     FILE *f = fopen(PATH, "rb");
     if (!f) return 0;
     header_t h;
-    if (fread(&h, sizeof h, 1, f) != 1 || memcmp(&h, &HEADER, sizeof h) != 0) {
+    int ok = fread(&h, sizeof h, 1, f) == 1 && memcmp(h.magic, HEADER.magic, 4) == 0;
+    if (!ok || h.record_size > sizeof(profile_t) || h.record_size < PROFILE_V03_SIZE) {
         fclose(f);
         printf("perfis.bin é de outra versão do jogo: começando sem perfis.\n");
         remove(PATH);
         return 0;
     }
-    size_t n = fread(out, sizeof(profile_t), max, f);
+    int n = 0;
+    while (n < max && fread(&out[n], h.record_size, 1, f) == 1) {
+        if (h.record_size < sizeof(profile_t)) profile_upgrade(&out[n], h.record_size);
+        n++;
+    }
     fclose(f);
+    if (h.record_size < sizeof(profile_t)) {
+        printf("perfis.bin era de uma versão antiga: perfis convertidos.\n");
+        save_all(out, max);
+    }
     int used = 0;
-    for (size_t i = 0; i < n; i++) used += out[i].used;
+    for (int i = 0; i < n; i++) used += out[i].used;
     return used;
 }
 
