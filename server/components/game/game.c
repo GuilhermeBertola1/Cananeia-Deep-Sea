@@ -234,6 +234,18 @@ static void send_rank(int slot) {
     slot < 0 ? send_all(&w) : send_w(slot, &w);
 }
 
+static uint8_t boat_look(const profile_t *pr) {
+    return (uint8_t)(level(pr, PART_HULL) << 4 | level(pr, PART_SAIL));
+}
+
+static void send_boat(int slot) {
+    const profile_t *pr = prof(&g.players[slot]);
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_BOAT);
+    for (int i = 0; i < PART_COUNT; i++) put_u8(&w, (uint8_t)level(pr, i));
+    send_w(slot, &w);
+}
+
 static int near(int x, int y, int ox, int oy, int extra) {
     int dx = x - ox, dy = y - oy;
     return dx >= -(VIEW_RADIUS + extra) && dx <= VIEW_RADIUS + extra && dy >= -(VIEW_RADIUS + extra) &&
@@ -251,7 +263,10 @@ static void send_state(int slot) {
     put_u32(&w, pr->money);
     put_u16(&w, p->capacity);
     put_u8(&w, p->speed);
-    put_u8(&w, at_dock(p) ? STATE_AT_DOCK : 0);
+    put_u8(&w, p->vel);
+    put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0));
+    put_u16(&w, (uint16_t)hp(p));
+    put_u16(&w, (uint16_t)hp_max(p));
     for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, pr->hold[i]);
 
     uint8_t online = 0;
@@ -267,6 +282,7 @@ static void send_state(int slot) {
         put_u8(&w, (uint8_t)i);
         put_u16(&w, (uint16_t)o->x);
         put_u16(&w, (uint16_t)o->y);
+        put_u8(&w, boat_look(prof(o)));
         n++;
     }
     out[count_at] = n;
@@ -429,6 +445,39 @@ static void steer(player_t *p, int want) {
     p->turn_timer = 0;
     int diff = (want - p->heading + 8) % 8; // passos no sentido horário
     p->heading = (uint8_t)((p->heading + (diff <= 4 ? 1 : 7)) % 8);
+}
+
+static void upgrade(int slot, uint8_t part) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!at_dock(p) || part >= PART_COUNT || level(pr, part) >= BOAT_LEVELS - 1) return;
+    int next = level(pr, part) + 1;
+    uint32_t price = UPGRADE_PRICE[next];
+    if (pr->money < price) { send_event(slot, EV_NO_MONEY, FISH_NONE, 0, price); return; }
+    pr->money -= price;
+    pr->boat[part] = (uint8_t)next;
+    update_stats(p);
+    storage_save(p->profile, pr); // dinheiro gasto: salva já
+    send_event(slot, EV_UPGRADED, part, (uint16_t)next, price);
+    send_boat(slot);
+    send_inventory(slot); // os stats do barco mudaram
+    send_rank(-1);
+}
+
+static void repair(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!at_dock(p)) return;
+    int missing = hp_max(p) - hp(p);
+    if (missing <= 0) return;
+    uint32_t price = (uint32_t)missing * REPAIR_CENTS_PER_HP;
+    if (pr->money < price) { send_event(slot, EV_NO_MONEY, FISH_NONE, 0, price); return; }
+    pr->money -= price;
+    pr->damage = 0;
+    update_stats(p); // sai da avaria
+    storage_save(p->profile, pr);
+    send_event(slot, EV_REPAIRED, FISH_NONE, (uint16_t)missing, price);
+    send_rank(-1);
 }
 
 static int try_move(player_t *p) {
@@ -645,6 +694,7 @@ static void join(int slot, const uint8_t *data, size_t len) {
     send_prices(slot);
     send_marks(slot);
     send_inventory(slot);
+    send_boat(slot);
     send_rank(-1);
     send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
 }
@@ -705,6 +755,12 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_DISCARD:
         if (len >= 2) discard(slot, data[1]);
+        break;
+    case C_UPGRADE:
+        if (len >= 2) upgrade(slot, data[1]);
+        break;
+    case C_REPAIR:
+        repair(slot);
         break;
     }
 }
