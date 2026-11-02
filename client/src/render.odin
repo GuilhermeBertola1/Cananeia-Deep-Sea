@@ -164,8 +164,9 @@ draw_terrain :: proc(v: View, layer: Layer) {
 		}
 	}
 	if layer == .Islands {
-		// NPC do porto.
+		// NPCs do porto: lojista e estaleiro.
 		if sx, sy, ok := in_view(v, DOCK_X, DOCK_Y - 1); ok do glyph(sx, sy, 'L', COLOR_ACCENT)
+		if sx, sy, ok := in_view(v, DOCK_X + 2, DOCK_Y - 1); ok do glyph(sx, sy, 'E', COLOR_ACCENT)
 	}
 }
 

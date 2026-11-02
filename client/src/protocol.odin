@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 3
+PROTOCOL_VERSION :: 4
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -14,6 +14,8 @@ C_INPUT :: 0x02
 C_SELL :: 0x03
 C_EQUIP :: 0x04
 C_DISCARD :: 0x05
+C_UPGRADE :: 0x06
+C_REPAIR :: 0x07
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -25,6 +27,7 @@ S_RANK :: 0x86
 S_MARKS :: 0x87
 S_PRICES :: 0x88
 S_INVENTORY :: 0x89
+S_BOAT :: 0x8A
 
 ERR_BAD_NAME :: 1
 ERR_NAME_ONLINE :: 2
@@ -40,9 +43,15 @@ EV_NOTHING_TO_SELL :: 4
 EV_WELCOME :: 5
 EV_ITEM :: 6
 EV_BAG_FULL :: 7
+EV_CRASH :: 8
+EV_BROKEN :: 9
+EV_UPGRADED :: 10
+EV_REPAIRED :: 11
+EV_NO_MONEY :: 12
 
 MARK_SCHOOL :: 1
 STATE_AT_DOCK :: 1 << 0
+STATE_BROKEN :: 1 << 1
 
 // Leitor com limite: se a mensagem vier curta, `ok` vira false e tudo lê 0.
 Reader :: struct {
@@ -111,5 +120,15 @@ send_equip :: proc(bag_index: u8) {
 
 send_discard :: proc(bag_index: u8) {
 	buf := [2]u8{C_DISCARD, bag_index}
+	net_send(buf[:])
+}
+
+send_upgrade :: proc(part: u8) {
+	buf := [2]u8{C_UPGRADE, part}
+	net_send(buf[:])
+}
+
+send_repair :: proc() {
+	buf := [1]u8{C_REPAIR}
 	net_send(buf[:])
 }
