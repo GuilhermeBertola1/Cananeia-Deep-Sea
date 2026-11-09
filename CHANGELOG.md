@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.0 (2026-11-08): upgrades do barco
+
+- Estaleiro no cais (NPC `E`, tecla U): vela, casco e leme com 5 níveis cada, de $150 a $2500
+- Vela aumenta a velocidade; casco aumenta a vida e o porão (150 a 420 peixes); leme vira mais rápido
+- Leme com inércia: o barco acelera, vira 45° por vez e desliza um pouco depois que você solta a tecla
+- Vida do barco: bater na costa rápido (4 células/s ou mais) gasta; o cais não estraga. Com vida 0 o barco fica avariado e anda devagar até o reparo ($0,20 por ponto)
+- Barra de vida e velocidade no painel
+- O barco muda de desenho conforme o nível do casco e da vela, para você e para os outros
+- Protocolo versão 4: `C_UPGRADE`, `C_REPAIR`, `S_BOAT`, vida e velocidade atual no `S_STATE`
+- Perfis da v0.3 são convertidos em vez de apagados (campos novos sempre no fim do `profile_t`)
+
 ## v0.3.0 (2026-10-26): contas, inventário e itens procedurais
 
 - Senha no perfil: o servidor guarda só sal + hash PBKDF2-SHA256 (mbedTLS/PSA no ESP32, C puro no PC, conferidos com o RFC 7914)

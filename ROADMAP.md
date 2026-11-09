@@ -5,14 +5,15 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 ## Como fazer cada nova versão
 
 1. Atualize o código: `git checkout main && git pull`.
-2. Crie um branch para a versão: `git checkout -b v0.3-inventario`.
+2. Crie um branch para a versão: `git checkout -b v0.5-pvp`.
 3. Um commit por passo, no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português: `tipo(escopo): descrição`. Exemplos: `feat(pesca): rede pega dois peixes por vez`, `fix(rede): ignorar mensagem curta`. Tipos: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`, `perf`. Escopos comuns: `cliente`, `servidor`, `esp32`, `protocolo`, `mapa`, `pesca`, `loja`.
 4. Se mudar mensagens da rede, atualize **os dois lados** (`protocol.h` e `protocol.odin`), o `docs/protocol.md` e aumente `PROTOCOL_VERSION`.
 5. Se mudar a geração do mapa, mude `world.c` **e** `world.odin` juntos. O checksum no `S_WELCOME` acusa se ficaram diferentes.
 6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e, quando der, no ESP32.
 7. Escreva o que mudou no `CHANGELOG.md`.
 8. Abra um Pull Request no GitHub. O Bertola revisa o código antes de qualquer merge na `main`.
-9. Crie a tag da versão: `git tag v0.3.0 && git push --tags`.
+9. Crie a tag da versão: `git tag v0.5.0 && git push --tags`.
+10. Campo novo no `profile_t` vai sempre no fim, e o `profile_upgrade` em `storage.h` aprende a converter o perfil da versão anterior. Assim ninguém perde a conta.
 
 ## Visão geral
 
@@ -21,8 +22,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.1 | Protótipo TypeScript (branch `prototipo-ts`) | Pronta |
 | v0.2 | Nova base: Odin/WASM + ESP32-S3, mapa, rede binária, pesca, cardumes, lojista, ranking | Pronta |
 | v0.3 | Contas com senha, inventário e itens procedurais | Pronta |
-| v0.4 | Upgrades do barco | Próxima |
-| v0.5 | Armas, PvP, morte e drops (bag e coroa) | |
+| v0.4 | Upgrades do barco | Pronta |
+| v0.5 | Armas, PvP, morte e drops (bag e coroa) | Próxima |
 | v0.6 | Sereia, mercenário e mecânico | |
 | v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | |
 | v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | |
@@ -57,20 +58,25 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 
 **Pronta quando:** dois jogadores com itens diferentes pescam em ritmos visivelmente diferentes.
 
-## v0.4: Upgrades do barco
+## v0.4: Upgrades do barco (pronta)
 
-- [ ] **Vela:** velocidade máxima
-- [ ] **Casco:** vida e capacidade do porão
-- [ ] **Leme:** direção com inércia; leme melhor vira mais rápido
-- [ ] **Durabilidade:** bater na costa gasta; reparo pago no porto
-- [ ] NPC **Estaleiro** no porto com níveis e preços
-- [ ] Barco desenhado diferente conforme o nível
+**Objetivo:** dinheiro vira barco melhor, e o barco melhor muda o jeito de navegar.
+
+- [x] **Vela:** velocidade máxima (+1 a +5)
+- [x] **Casco:** vida e capacidade do porão (150 a 420)
+- [x] **Leme:** direção com inércia; leme melhor vira mais rápido (90°/s a 450°/s)
+- [x] **Durabilidade:** é a vida do barco; bater na costa gasta, reparo pago no porto; vida 0 = avariado
+- [x] NPC **Estaleiro** no porto com níveis e preços (`server/components/game/boat.c`)
+- [x] Barco desenhado diferente conforme o nível do casco e da vela
+- [x] Perfis da v0.3 convertidos, sem perder contas
+
+**Pronta quando:** um barco com vela e leme no máximo dá a volta na ilha do porto visivelmente mais rápido que um barco novo.
 
 ## v0.5: Armas, PvP, morte e drops
 
-- [ ] Vida do barco e barra de vida no HUD
+- [ ] Tiros tiram vida do barco (a vida e a barra no HUD já existem desde a v0.4)
 - [ ] Tiro com a arma equipada, alcance e recarga; dano só no servidor
-- [ ] Ao morrer: cai uma **bag** (peixes do porão) e uma **coroa**, renasce no porto
+- [ ] Vida 0 por tiro = morte (na costa continua sendo só avaria). Ao morrer: cai uma **bag** (peixes do porão) e uma **coroa**, renasce no porto
 - [ ] Zonas seguras perto das ilhas com NPC
 - [ ] Bags e coroas no minimapa (`S_MARKS`)
 

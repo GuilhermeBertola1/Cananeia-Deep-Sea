@@ -16,13 +16,16 @@ O protótipo antigo em TypeScript está no branch `prototipo-ts`.
 | Tecla | Ação |
 | --- | --- |
 | WASD / setas | navegar |
-| E | falar com o lojista (no cais `H`) |
+| E | falar com o lojista `L` (no cais `H`) |
 | 1 a 9 / T | vender uma espécie / vender tudo (na loja) |
+| U | estaleiro `E` (no cais): 1 vela, 2 casco, 3 leme, R conserta |
 | M | mapa grande |
 | I | inventário: W/S escolhe, Enter equipa ou tira, X duas vezes joga fora |
 | Esc | fechar janela |
 
 Você pesca sozinho enquanto navega. Dentro de um cardume (`><`) pesca muito mais. Mar fundo paga melhor. O preço cai quando muita gente vende a mesma espécie e volta com o tempo. Às vezes vem um baú com um item: rede melhor pesca mais rápido, motor deixa o barco mais veloz, amuleto traz mais baús. Cada capitão entra com nome e senha.
+
+O barco tem inércia: acelera aos poucos, vira 45° por vez e desliza quando você solta a tecla. Bater na costa rápido tira vida; com vida 0 ele fica avariado e lento até você consertar. No estaleiro, o dinheiro vira vela (velocidade), casco (vida e porão) e leme (vira mais rápido), e o barco muda de desenho.
 
 ## Estrutura
 
