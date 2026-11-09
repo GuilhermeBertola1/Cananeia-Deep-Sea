@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 6
+#define PROTOCOL_VERSION 7
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -48,10 +48,19 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_MERC = 20, EV_MERC_NOTHING = 21,
        EV_SPIN_WAIT = 22, EV_SPIN_STEAL = 23, EV_SPIN_MISSION = 24, EV_HUNTED = 25, EV_SPIN_NOTHING = 26,
        EV_MISSION_WAIT = 27, EV_ENCHANT = 28, EV_NOTHING_TO_ENCHANT = 29, EV_MISSION_GIVE_UP = 30,
-       EV_COMBINED = 31, EV_CANT_COMBINE = 32 };
-enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4 };
+       EV_COMBINED = 31, EV_CANT_COMBINE = 32,
+       EV_BITTEN = 33, EV_PREDATOR_HIT = 34, EV_PREDATOR_KILL = 35,
+       EV_WORLD_START = 36, EV_WORLD_END = 37 };
+// Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
+enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2, WORLD_GHOST = 3 };
+// Tipos de bicho (no EV_BITTEN, EV_PREDATOR_* e somados a KILLER_PREDATOR).
+enum { PRED_SHARK = 0, PRED_GHOST = 1 };
+// No EV_DIED, `espécie` é quem afundou: o id do jogador, ou KILLER_PREDATOR + tipo do bicho.
+#define KILLER_PREDATOR 0x80
+enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5 };
 enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
-enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3 };
+enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3,
+       STATE_AT_VILLAGE = 1 << 4 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.
 typedef struct {

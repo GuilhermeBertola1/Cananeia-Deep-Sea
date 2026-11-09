@@ -21,6 +21,9 @@ COLOR_SCHOOL :: rl.Color{125, 249, 255, 255}
 COLOR_SHOT :: rl.Color{255, 150, 70, 255}
 COLOR_BAG :: rl.Color{214, 160, 96, 255}
 COLOR_MERMAID :: rl.Color{255, 159, 243, 255}
+COLOR_VILLAGE :: rl.Color{150, 230, 140, 255}
+COLOR_SHARK :: rl.Color{190, 200, 214, 255}
+COLOR_GHOST :: rl.Color{150, 255, 190, 255}
 
 PLAYER_COLORS := [6]rl.Color {
 	{255, 107, 107, 255},
@@ -130,6 +133,7 @@ draw_world :: proc() {
 			draw_terrain(v, layer)
 		case .Marine_Life:
 			draw_schools(v)
+			draw_predators(v)
 		case .Boats:
 			draw_boats(v)
 		case .Effects:
@@ -200,7 +204,8 @@ draw_schools :: proc(v: View) {
 			}
 		}
 	}
-	// Bags ($) e coroas (W) boiando, piscando para chamar atenção, e a sereia (S) na pedra dela.
+	// Bags ($) e coroas (W) boiando, piscando para chamar atenção, a sereia (S) na
+	// pedra dela e o cais das vilas (V).
 	for m in s.marks[:s.mark_count] {
 		if m.kind == MARK_SCHOOL do continue
 		sx, sy := in_view(v, m.x, m.y) or_continue
@@ -213,6 +218,9 @@ draw_schools :: proc(v: View) {
 		case MARK_MERMAID:
 			glyph(sx, sy, 'S', COLOR_MERMAID)
 			draw_label(v, m.x, m.y - 1, "Sereia", COLOR_MERMAID)
+		case MARK_VILLAGE:
+			glyph(sx, sy, 'V', COLOR_VILLAGE)
+			draw_label(v, m.x, m.y - 1, "Vila", COLOR_VILLAGE)
 		}
 	}
 }
@@ -223,6 +231,35 @@ draw_label :: proc(v: View, x, y: i32, str: string, color: rl.Color) {
 	if !ok do return
 	w := text_width(str, 10)
 	text(str, f32(sx * CELL_W + CELL_W / 2) - w / 2, f32(sy * CELL_H + 4), 10, color)
+}
+
+// Tubarões (^, a barbatana) e o navio fantasma. A vida aparece embaixo
+// quando já levaram tiro.
+@(private = "file")
+draw_predators :: proc(v: View) {
+	for p in s.predators[:s.pred_count] {
+		if p.kind == PRED_GHOST {
+			// Meio transparente e pulsando devagar: é um fantasma.
+			alpha := u8(170 + 70 * math.sin(rl.GetTime() * 2))
+			draw_boat(v, p.x, p.y, BOAT_LEVELS - 1, BOAT_LEVELS - 1, {COLOR_GHOST.r, COLOR_GHOST.g, COLOR_GHOST.b, alpha})
+			draw_label(v, p.x, p.y - 2, "Navio fantasma", COLOR_GHOST)
+		} else {
+			sx, sy := in_view(v, p.x, p.y) or_continue
+			glyph(sx, sy, '^', COLOR_SHARK)
+		}
+		if p.hp_pct < 100 do draw_hp_bar(v, p.x, p.y, p.hp_pct)
+	}
+}
+
+// Barrinha de vida embaixo de um barco ou de um bicho.
+@(private = "file")
+draw_hp_bar :: proc(v: View, x, y: i32, pct: u8) {
+	sx, sy, ok := in_view(v, x, y)
+	if !ok do return
+	bx, by := f32((sx - 1) * CELL_W), f32((sy + 1) * CELL_H + 2)
+	bw := f32(3 * CELL_W)
+	rl.DrawRectangleV({bx, by}, {bw, 4}, {40, 50, 66, 255})
+	rl.DrawRectangleV({bx, by}, {bw * f32(pct) / 100, 4}, {255, 107, 107, 255})
 }
 
 HULL_SHAPES := [BOAT_LEVELS]string{"@", "(@)", "\\@/", "\\=@=/", "<\\=@=/>"}
@@ -254,12 +291,7 @@ draw_boats :: proc(v: View) {
 		if sail > 0 do label_y -= 1
 		draw_label(v, b.x, label_y, p.name, rl.WHITE)
 		// Barrinha de vida embaixo do barco, só quando já levou dano.
-		if sx, sy, ok := in_view(v, b.x, b.y); ok && b.hp_pct < 100 {
-			bx, by := f32((sx - 1) * CELL_W), f32((sy + 1) * CELL_H + 2)
-			bw := f32(3 * CELL_W)
-			rl.DrawRectangleV({bx, by}, {bw, 4}, {40, 50, 66, 255})
-			rl.DrawRectangleV({bx, by}, {bw * f32(b.hp_pct) / 100, 4}, {255, 107, 107, 255})
-		}
+		if b.hp_pct < 100 do draw_hp_bar(v, b.x, b.y, b.hp_pct)
 	}
 	sx, sy, _ := in_view(v, s.x, s.y)
 	pulse := u8(60 + 40 * math.sin(rl.GetTime() * 4))
@@ -303,15 +335,28 @@ draw_effects :: proc(v: View) {
 }
 
 // Céu: nuvens passando e um ciclo de dia e noite (10 minutos).
-// À noite, só o entorno do barco fica iluminado.
+// À noite, só o entorno do barco fica iluminado. Na tempestade, céu escuro,
+// chuva caindo com o vento e um relâmpago de vez em quando.
 @(private = "file")
 draw_sky :: proc(v: View) {
 	day := math.sin(rl.GetTime() * math.TAU / 600)
 	night := f32(clamp(-day * 1.4, 0, 1)) // 0 de dia, 1 no meio da noite
 	drift := i32(rl.GetTime() * 2)
+	storm := s.world.kind == WORLD_STORM
+	flash := storm && hash2(i32(rl.GetTime() * 4), 0, 77) % 40 == 0 // relâmpago: ~1 a cada 10 s
+	rain: rune = '/' if s.world.dx > 0 else ('\\' if s.world.dx < 0 else '|')
 	for sy in 0 ..< v.rows {
 		for sx in 0 ..< v.cols {
 			x, y := v.ox + sx, v.oy + sy
+			if storm {
+				ex, ey := x - s.world.x, y - s.world.y
+				if ex * ex + ey * ey <= s.world.radius * s.world.radius {
+					sky := rl.Color{230, 240, 255, 90} if flash else rl.Color{14, 18, 30, 120}
+					rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, sky)
+					// A gota que está em (x, y) agora estava uma célula acima (e contra o vento) no tick anterior.
+					if hash2(x - v.t * s.world.dx, y - v.t, 5) % 100 < 14 do glyph(sx, sy, rain, {170, 190, 225, 170})
+				}
+			}
 			// Nuvem: ruído grosso que anda para o leste.
 			c := cloud(x - drift, y)
 			if c > 0 do rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, {230, 240, 255, u8(c * 70)})

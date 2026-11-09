@@ -11,7 +11,8 @@ MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 103 // cardumes (70) + bags e coroas (32) + a sereia
+MAX_MARKS :: 106 // cardumes (70) + bags e coroas (32) + a sereia + 3 vilas
+MAX_PREDATORS :: 12
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
 LOG_SIZE :: 6
@@ -60,6 +61,22 @@ School :: struct {
 Mark :: struct {
 	x, y:          i32,
 	kind, species: u8,
+}
+
+// Tubarão ou navio fantasma perto do barco.
+Predator :: struct {
+	kind:   u8, // PRED_SHARK ou PRED_GHOST
+	x, y:   i32,
+	hp_pct: u8,
+}
+
+// O evento do mundo que está acontecendo (kind = WORLD_NONE quando não tem).
+World_Event :: struct {
+	kind:   u8,
+	x, y:   i32,
+	radius: i32,
+	secs:   int, // segundos que faltam
+	dx, dy: i32, // vento da tempestade
 }
 
 Rank_Entry :: struct {
@@ -113,6 +130,8 @@ State :: struct {
 	broken:        bool,
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
 	at_mermaid:    bool, // perto da pedra da sereia
+	at_village:    bool, // no cais de uma vila: vende e conserta
+	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
 	loot:          [LOOT_SLOTS]Loot,
@@ -140,6 +159,9 @@ State :: struct {
 	shot_count:    int,
 	marks:         [MAX_MARKS]Mark,
 	mark_count:    int,
+	predators:     [MAX_PREDATORS]Predator,
+	pred_count:    int,
+	world:         World_Event,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
 	prices:        [FISH_COUNT]int,
@@ -328,7 +350,7 @@ update_playing :: proc() {
 	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open || s.mermaid_open {
 			close_npcs()
-		} else if s.at_dock {
+		} else if s.at_dock || s.at_village {
 			close_npcs()
 			s.shop_open = true
 		} else if s.at_mermaid {
@@ -344,6 +366,8 @@ update_playing :: proc() {
 		} else if s.at_dock {
 			close_npcs()
 			s.yard_open = true
+		} else if s.at_village {
+			add_log("A vila não tem estaleiro, mas o lojista conserta: E e depois R.")
 		} else {
 			add_log("O estaleiro (E) fica no cais (H) do porto.")
 		}
@@ -379,6 +403,7 @@ update_playing :: proc() {
 			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do send_sell(u8(i))
 		}
 		if rl.IsKeyPressed(.T) do send_sell(FISH_NONE)
+		if rl.IsKeyPressed(.R) && s.at_village do send_repair()
 	}
 	if s.yard_open {
 		for part in 0 ..< PART_COUNT {
@@ -392,8 +417,8 @@ update_playing :: proc() {
 		if rl.IsKeyPressed(.G) do send_mermaid(MERMAID_TALK)
 		if rl.IsKeyPressed(.X) && s.has_mission do send_mermaid(MERMAID_GIVE_UP)
 	}
+	if !s.at_dock && !s.at_village do s.shop_open = false
 	if !s.at_dock {
-		s.shop_open = false
 		s.yard_open = false
 		s.merc_open = false
 		s.mech_open = false
@@ -504,6 +529,21 @@ money_text :: proc(cents: u32) -> string {
 // Nome de quem a sereia mandou afundar.
 mission_target :: proc() -> string {
 	return string(s.mission_buf[:s.mission_len])
+}
+
+// Espécie preferida da vila em cujo cais o barco está (vem na marca do minimapa).
+village_fav :: proc() -> (int, bool) {
+	for m in s.marks[:s.mark_count] {
+		if m.kind == MARK_VILLAGE && abs(m.x - s.x) <= 1 && abs(m.y - s.y) <= 1 do return int(m.species), true
+	}
+	return 0, false
+}
+
+// Quem atacou: um jogador, ou um bicho (KILLER_PREDATOR + tipo).
+attacker_name :: proc(id: int) -> string {
+	if id == KILLER_PREDATOR + PRED_SHARK do return "Um tubarão"
+	if id == KILLER_PREDATOR + PRED_GHOST do return "O navio fantasma"
+	return player_name(id)
 }
 
 player_name :: proc(id: int) -> string {
@@ -617,7 +657,8 @@ on_net_message :: proc(data: []u8) {
 			add_popup(COLOR_ACCENT, "%s nível %d!", part_name(species), count + 1)
 			add_log("Estaleiro: %s agora é nível %d, por %s.", part_name(species), count + 1, money_text(value))
 		case EV_REPAIRED:
-			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
+			who := "Lojista da vila" if s.at_village else "Estaleiro"
+			add_log("%s: consertou %d de vida por %s.", who, count, money_text(value))
 		case EV_NO_MONEY:
 			who := "Mecânico" if s.mech_open else "Estaleiro"
 			add_log("%s: \"Isso custa %s, marujo. Volte com o dinheiro.\"", who, money_text(value))
@@ -626,14 +667,14 @@ on_net_message :: proc(data: []u8) {
 			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
 		case EV_HURT:
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
-			add_log("%s te acertou! -%d de vida, sobrou %d.", player_name(species), count, value)
+			add_log("%s te acertou! -%d de vida, sobrou %d.", attacker_name(species), count, value)
 		case EV_SAFE_ZONE:
 			add_log("Zona segura: perto do porto ninguém atira.")
 		case EV_KILL:
 			add_popup(COLOR_ACCENT, "Afundou %s!", player_name(species))
 			add_log("Você afundou %s! A bag e a coroa ficaram boiando.", player_name(species))
 		case EV_DIED:
-			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", player_name(species), count)
+			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", attacker_name(species), count)
 		case EV_LOOT:
 			what := "bag" if species == LOOT_BAG else "coroa"
 			if count == 1 {
@@ -687,6 +728,37 @@ on_net_message :: proc(data: []u8) {
 			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
 		case EV_CANT_COMBINE:
 			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
+		case EV_BITTEN:
+			add_popup({255, 107, 107, 255}, "-%d vida", count)
+			add_log("Um tubarão te mordeu! -%d de vida, sobrou %d. Fuja para o raso!", count, value)
+		case EV_PREDATOR_HIT:
+			what := "o navio fantasma" if species == PRED_GHOST else "o tubarão"
+			add_log("Acertou %s! -%d, sobrou %d de vida nele.", what, count, value)
+		case EV_PREDATOR_KILL:
+			add_popup(COLOR_ACCENT, "+%s", money_text(value))
+			if species == PRED_GHOST {
+				add_log("O navio fantasma afundou! Você deu %d de dano e ficou com %s e um baú.", count, money_text(value))
+			} else {
+				add_log("Afundou um tubarão! O porto paga %s pela barbatana.", money_text(value))
+			}
+		case EV_WORLD_START:
+			// `value` traz onde: x nos 16 bits de baixo, y nos de cima.
+			dir, dist := compass(i32(value & 0xFFFF), i32(value >> 16))
+			add_popup(world_color(u8(species)), "%s!", world_name(u8(species)))
+			switch species {
+			case WORLD_STORM:
+				add_log("Tempestade a %d células (%s)! Pesca em dobro, mas o vento empurra e o casco sofre.", dist, dir)
+			case WORLD_SQUID:
+				add_log("Maré de lulas a %d células (%s)! Lula-gigante por %d s.", dist, dir, count)
+			case WORLD_GHOST:
+				add_log("Navio fantasma a %d células (%s)! Juntem-se para afundá-lo.", dist, dir)
+			}
+		case EV_WORLD_END:
+			switch species {
+			case WORLD_STORM: add_log("A tempestade passou.")
+			case WORLD_SQUID: add_log("A maré de lulas acabou.")
+			case WORLD_GHOST: add_log("O navio fantasma se foi.")
+			}
 		}
 
 
@@ -771,6 +843,7 @@ read_state :: proc(r: ^Reader) {
 	s.broken = flags & STATE_BROKEN != 0
 	s.safe = flags & STATE_SAFE != 0
 	s.at_mermaid = flags & STATE_AT_MERMAID != 0
+	s.at_village = flags & STATE_AT_VILLAGE != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))
@@ -803,4 +876,20 @@ read_state :: proc(r: ^Reader) {
 		s.shots[s.shot_count] = shot
 		s.shot_count += 1
 	}
+
+	// Desde a v7: estoque da região, bichos e o evento do mundo.
+	s.stock_pct = int(read_u8(r))
+	n = int(read_u8(r))
+	s.pred_count = 0
+	for _ in 0 ..< min(n, MAX_PREDATORS) {
+		p := Predator{kind = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), hp_pct = read_u8(r)}
+		if !r.ok do break
+		s.predators[s.pred_count] = p
+		s.pred_count += 1
+	}
+	ev := World_Event{kind = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), radius = i32(read_u8(r))}
+	ev.secs = int(read_u16(r))
+	ev.dx = i32(i8(read_u8(r)))
+	ev.dy = i32(i8(read_u8(r)))
+	if r.ok do s.world = ev
 }

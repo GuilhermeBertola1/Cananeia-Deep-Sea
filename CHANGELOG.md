@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.7.0 (2026-11-09): ecossistema, vilas, tubarões e eventos do mundo
+
+- **Estoque de peixe por região:** o mar é dividido em regiões de 32x32 células. Pescar esvazia a região, a pesca rende menos quando ela está vazia e o peixe volta sozinho com o tempo (de vazia a cheia em uns 6 minutos). Cardumes aparecem mais onde tem peixe e vão embora quando a região cai abaixo de 20%
+- **Vilas de pescadores** (`V`) em 3 ilhas, a 60–200 células do porto, sempre no mesmo lugar para o mesmo mapa. Cada vila compra peixe e conserta o barco (tecla E), paga 25% a mais pela espécie preferida dela e tem zona segura em volta
+- **Tubarões** (`^`): até 10 no mar fundo, fora das zonas seguras. Caçam barcos fracos (vida abaixo de 120) e mordem 8 de vida a cada 1,5 s. Dá para afundar um com tiros e ganhar $15
+- **Eventos do mundo**, um de cada vez, o primeiro entre 2 e 4 minutos e depois a cada 4 a 8 minutos, anunciados para todos:
+  - **Tempestade:** anda com o vento, empurra o barco e tira vida aos poucos (só avaria, não afunda), mas a pesca rende em dobro
+  - **Maré de lulas:** 6 cardumes de lula num ponto do mar fundo por 90 s
+  - **Navio fantasma:** 300 de vida, persegue e atira em quem chegar perto. Ao afundar, divide $300 entre quem acertou, conforme o dano, e cada um ganha um item
+- Tela: vilas no mapa e no minimapa, janela do lojista da vila, barra "Peixe na região" no painel, tubarões e navio fantasma com barra de vida, tempestade com chuva e relâmpagos, linha do evento no painel com tempo e direção, e o círculo do evento no minimapa
+- Protocolo versão 7: estoque da região, bichos por perto e evento do mundo no `S_STATE`, flag "na vila", vilas no `S_MARKS`, eventos 33 a 37
+- Os perfis da v0.6 continuam valendo sem conversão, porque o `profile_t` não mudou
+
 ## v0.6.0 (2026-11-09): sereia, mercenário e mecânico
 
 - **Mercenário** no cais (NPC `M`, tecla B): fica com as bags dos outros e passa os peixes delas para o seu porão, até encher. Paga $25 por coroa, menos pela coroa que a sereia pediu

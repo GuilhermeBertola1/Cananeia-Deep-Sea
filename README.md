@@ -16,9 +16,10 @@ O protótipo antigo em TypeScript está no branch `prototipo-ts`.
 | Tecla | Ação |
 | --- | --- |
 | WASD / setas | navegar |
-| E | falar com o lojista `L` (no cais `H`) ou com a sereia `S` (no mar) |
+| E | falar com o lojista `L` (no cais `H`), com o lojista de uma vila `V` ou com a sereia `S` (no mar) |
 | 1 a 9 / T | vender uma espécie / vender tudo (na loja) |
 | U | estaleiro `E` (no cais): 1 vela, 2 casco, 3 leme, R conserta |
+| R | na loja de uma vila: consertar o barco |
 | B | mercenário `M` (no cais): T entrega as bags e coroas |
 | C | mecânico `C` (no porto): Enter marca um item, Enter no segundo junta os dois |
 | G / X | na sereia: girar a roleta ou entregar a coroa / desistir da missão |
@@ -34,6 +35,8 @@ O barco tem inércia: acelera aos poucos, vira 45° por vez e desliza quando voc
 Com um arpão, mosquete ou canhão equipado, você atira onde o mouse aponta. Perto do porto é zona segura. Barco que zera a vida por tiro afunda: deixa no mar uma bag (`$`) com os peixes do porão e uma coroa (`W`), e o capitão volta ao porto. Passe por cima para pegar: a sua bag devolve os peixes, e o saque dos outros fica guardado no barco.
 
 No porto, o mercenário troca as bags dos outros pelos peixes delas e paga uma recompensa pelas coroas. Em mar aberto, numa pedra, mora a sereia: a roleta dela pode te roubar ou dar a missão de afundar outro capitão; trazendo a coroa dele, ela encanta um dos seus itens. O mecânico junta dois itens do mesmo tipo num melhor.
+
+O mar está vivo. Cada região tem uma quantidade de peixe: pesque demais no mesmo lugar e ela esvazia (o painel mostra quanto sobrou), depois se recupera sozinha. Em outras ilhas há vilas de pescadores (`V`) que compram peixe, pagam mais pela espécie preferida e consertam o barco. Tubarões (`^`) rondam o mar fundo atrás de barcos fracos. De tempos em tempos acontece um evento para todos: uma tempestade que empurra o barco mas dobra a pesca, uma maré de lulas, ou um navio fantasma que atira em quem chegar perto e divide o tesouro entre quem ajudou a afundá-lo.
 
 ## Estrutura
 
