@@ -35,6 +35,10 @@
 #define STEAL_PCT 10
 #define STEAL_MAX_CENTS 10000 // ela rouba 10% do dinheiro, no máximo $100
 
+// Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
+// dois comuns já dão um raro.
+static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
+
 // Mercado: vender 200 de uma espécie derruba o preço pela metade,
 // nunca abaixo de 30%, e a pressão cai 1% por segundo.
 #define MARKET_SATURATION 200000 // em milésimos de peixe
@@ -734,6 +738,40 @@ static void mermaid(int slot, uint8_t action) {
     }
 }
 
+// Mecânico: dois itens do mesmo tipo viram um só, sorteado de novo pelo
+// gerador. Sai no mínimo com a raridade do melhor dos dois; se os dois têm a
+// mesma raridade, sai uma acima. O encanto maior fica.
+static void combine(int slot, uint8_t a, uint8_t b) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!at_dock(p) || a >= BAG_SIZE || b >= BAG_SIZE || a == b) return;
+    item_t ia = pr->bag[a], ib = pr->bag[b];
+    if (ia.base == ITEM_NONE || ia.base != ib.base) { send_event(slot, EV_CANT_COMBINE, FISH_NONE, 0, 0); return; }
+
+    uint8_t ra = item_info(ia).rarity, rb = item_info(ib).rarity;
+    uint8_t want = ra > rb ? ra : rb;
+    if (ra == rb && want < RARITY_LEGENDARY) want++;
+    uint32_t price = COMBINE_PRICE[want];
+    if (pr->money < price) { send_event(slot, EV_NO_MONEY, FISH_NONE, 0, price); return; }
+
+    // Sorteia sementes até sair a raridade pedida (lendário é 1 em 100).
+    item_t made = item_new(ia.base, rnd());
+    for (int tries = 0; tries < 100000 && item_info(made).rarity < want; tries++) made = item_new(ia.base, rnd());
+
+    uint8_t ea = equipped_slot(pr, a), eb = equipped_slot(pr, b);
+    if (eb) pr->equipped[eb - 1] = ea ? 0 : a + 1; // estava equipado: o novo fica no lugar
+    pr->enchant[a] = pr->enchant[a] > pr->enchant[b] ? pr->enchant[a] : pr->enchant[b];
+    pr->bag[a] = made;
+    pr->bag[b] = (item_t){0};
+    pr->enchant[b] = 0;
+    pr->money -= price;
+    update_stats(p);
+    storage_save(p->profile, pr);
+    send_event(slot, EV_COMBINED, made.base, item_info(made).rarity, price);
+    send_inventory(slot);
+    send_rank(-1);
+}
+
 static int try_move(player_t *p) {
     int dx = DIR_X[p->heading], dy = DIR_Y[p->heading];
     int nx = p->x + dx, ny = p->y + dy;
@@ -1207,6 +1245,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_MERMAID:
         if (len >= 2) mermaid(slot, data[1]);
+        break;
+    case C_COMBINE:
+        if (len >= 3) combine(slot, data[1], data[2]);
         break;
     }
 }
