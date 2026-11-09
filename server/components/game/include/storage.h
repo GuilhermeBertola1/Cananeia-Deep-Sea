@@ -17,6 +17,16 @@
 #define EQUIP_TOOL 1
 #define EQUIP_BOOST 2
 
+#define LOOT_SLOTS 4
+
+typedef enum { LOOT_NONE = 0, LOOT_BAG, LOOT_CROWN } loot_kind_t;
+
+typedef struct {
+    uint8_t kind;              // loot_kind_t
+    uint8_t owner;             // índice do perfil de quem morreu
+    uint16_t fish[FISH_COUNT]; // só a bag tem peixes
+} loot_t;
+
 typedef struct {
     char name[NAME_MAX_LEN + 1];
     uint8_t used;
@@ -29,12 +39,17 @@ typedef struct {
     uint8_t equipped[EQUIP_SLOTS];
     uint8_t boat[3];
     uint16_t damage;
+    loot_t loot[LOOT_SLOTS];
+    uint16_t kills, deaths;
 } profile_t;
 
 #define PROFILE_V03_SIZE 200
+#define PROFILE_V04_SIZE 204
 
 static inline void profile_upgrade(profile_t *p, size_t old_size) {
-    size_t keep = old_size == PROFILE_V03_SIZE ? offsetof(profile_t, boat) : old_size;
+    size_t keep = old_size == PROFILE_V03_SIZE   ? offsetof(profile_t, boat)
+                  : old_size == PROFILE_V04_SIZE ? offsetof(profile_t, loot)
+                                                 : old_size;
     memset((uint8_t *)p + keep, 0, sizeof(profile_t) - keep);
 }
 
