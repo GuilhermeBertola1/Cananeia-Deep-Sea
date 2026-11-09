@@ -90,10 +90,10 @@ State :: struct {
 	money:         u32,
 	capacity:      int,
 	speed:         int,
-	vel: 		   int,
+	vel:           int,
 	at_dock:       bool,
 	hp, hp_max:    int,
-	broken	       bool,
+	broken:        bool,
 	boat_level:    [PART_COUNT]int,
 	hold:          [FISH_COUNT]int,
 	bag:           [BAG_SIZE]Item,
@@ -474,7 +474,7 @@ on_net_message :: proc(data: []u8) {
 			add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
 		case EV_BAG_FULL:
 			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
-				case EV_CRASH:
+		case EV_CRASH:
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
 			add_log("Bateu na costa! -%d de vida, sobrou %d. Perto da terra, vá devagar.", count, value)
 		case EV_BROKEN:
