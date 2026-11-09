@@ -350,7 +350,7 @@ update_playing :: proc() {
 	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open || s.mermaid_open {
 			close_npcs()
-		} else if s.at_dock {
+		} else if s.at_dock || s.at_village {
 			close_npcs()
 			s.shop_open = true
 		} else if s.at_mermaid {
@@ -366,6 +366,8 @@ update_playing :: proc() {
 		} else if s.at_dock {
 			close_npcs()
 			s.yard_open = true
+		} else if s.at_village {
+			add_log("A vila não tem estaleiro, mas o lojista conserta: E e depois R.")
 		} else {
 			add_log("O estaleiro (E) fica no cais (H) do porto.")
 		}
@@ -401,6 +403,7 @@ update_playing :: proc() {
 			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do send_sell(u8(i))
 		}
 		if rl.IsKeyPressed(.T) do send_sell(FISH_NONE)
+		if rl.IsKeyPressed(.R) && s.at_village do send_repair()
 	}
 	if s.yard_open {
 		for part in 0 ..< PART_COUNT {
@@ -414,8 +417,8 @@ update_playing :: proc() {
 		if rl.IsKeyPressed(.G) do send_mermaid(MERMAID_TALK)
 		if rl.IsKeyPressed(.X) && s.has_mission do send_mermaid(MERMAID_GIVE_UP)
 	}
+	if !s.at_dock && !s.at_village do s.shop_open = false
 	if !s.at_dock {
-		s.shop_open = false
 		s.yard_open = false
 		s.merc_open = false
 		s.mech_open = false
@@ -526,6 +529,14 @@ money_text :: proc(cents: u32) -> string {
 // Nome de quem a sereia mandou afundar.
 mission_target :: proc() -> string {
 	return string(s.mission_buf[:s.mission_len])
+}
+
+// Espécie preferida da vila em cujo cais o barco está (vem na marca do minimapa).
+village_fav :: proc() -> (int, bool) {
+	for m in s.marks[:s.mark_count] {
+		if m.kind == MARK_VILLAGE && abs(m.x - s.x) <= 1 && abs(m.y - s.y) <= 1 do return int(m.species), true
+	}
+	return 0, false
 }
 
 player_name :: proc(id: int) -> string {
@@ -639,7 +650,8 @@ on_net_message :: proc(data: []u8) {
 			add_popup(COLOR_ACCENT, "%s nível %d!", part_name(species), count + 1)
 			add_log("Estaleiro: %s agora é nível %d, por %s.", part_name(species), count + 1, money_text(value))
 		case EV_REPAIRED:
-			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
+			who := "Lojista da vila" if s.at_village else "Estaleiro"
+			add_log("%s: consertou %d de vida por %s.", who, count, money_text(value))
 		case EV_NO_MONEY:
 			who := "Mecânico" if s.mech_open else "Estaleiro"
 			add_log("%s: \"Isso custa %s, marujo. Volte com o dinheiro.\"", who, money_text(value))

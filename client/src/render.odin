@@ -21,6 +21,7 @@ COLOR_SCHOOL :: rl.Color{125, 249, 255, 255}
 COLOR_SHOT :: rl.Color{255, 150, 70, 255}
 COLOR_BAG :: rl.Color{214, 160, 96, 255}
 COLOR_MERMAID :: rl.Color{255, 159, 243, 255}
+COLOR_VILLAGE :: rl.Color{150, 230, 140, 255}
 
 PLAYER_COLORS := [6]rl.Color {
 	{255, 107, 107, 255},
@@ -200,7 +201,8 @@ draw_schools :: proc(v: View) {
 			}
 		}
 	}
-	// Bags ($) e coroas (W) boiando, piscando para chamar atenção, e a sereia (S) na pedra dela.
+	// Bags ($) e coroas (W) boiando, piscando para chamar atenção, a sereia (S) na
+	// pedra dela e o cais das vilas (V).
 	for m in s.marks[:s.mark_count] {
 		if m.kind == MARK_SCHOOL do continue
 		sx, sy := in_view(v, m.x, m.y) or_continue
@@ -213,6 +215,9 @@ draw_schools :: proc(v: View) {
 		case MARK_MERMAID:
 			glyph(sx, sy, 'S', COLOR_MERMAID)
 			draw_label(v, m.x, m.y - 1, "Sereia", COLOR_MERMAID)
+		case MARK_VILLAGE:
+			glyph(sx, sy, 'V', COLOR_VILLAGE)
+			draw_label(v, m.x, m.y - 1, "Vila", COLOR_VILLAGE)
 		}
 	}
 }

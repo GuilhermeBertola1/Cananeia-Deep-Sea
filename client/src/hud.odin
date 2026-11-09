@@ -53,6 +53,7 @@ draw_map_at :: proc(x, y, size: f32) {
 		case MARK_BAG: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_BAG)
 		case MARK_CROWN: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_ACCENT)
 		case MARK_MERMAID: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_MERMAID)
+		case MARK_VILLAGE: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_VILLAGE)
 		}
 	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
@@ -128,6 +129,15 @@ draw_hud :: proc() {
 		text(fmt.tprintf("Missão da sereia: afundar %s", mission_target()), x, y, 10, COLOR_MERMAID)
 		y += 14
 	}
+	// Peixe que sobrou na região: pescar demais esvazia, e ele volta com o tempo.
+	if !s.offline {
+		stock := f32(s.stock_pct) / 100
+		stock_color := COLOR_SCHOOL if s.stock_pct > 50 else (COLOR_ACCENT if s.stock_pct > 20 else rl.Color{255, 107, 107, 255})
+		text(fmt.tprintf("Peixe na região: %d%%", s.stock_pct), x, y, 10, stock_color)
+		rl.DrawRectangleV({x + 130, y + 3}, {bar_w - 130, 6}, {40, 50, 66, 255})
+		rl.DrawRectangleV({x + 130, y + 3}, {(bar_w - 130) * stock, 6}, stock_color)
+		y += 14
+	}
 
 	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
@@ -156,6 +166,9 @@ draw_hud :: proc() {
 	tip := ""
 	if s.at_dock do tip = "No cais. E: lojista (L)  U: estaleiro (E)  B: mercenário (M)  C: mecânico (C)"
 	if s.at_mermaid do tip = "A sereia (S) está ouvindo. E: falar com ela"
+	if fav, ok := village_fav(); ok && s.at_village {
+		tip = fmt.tprintf("Vila de pescadores. E: lojista (paga +25%% por %s)", species_name(fav))
+	}
 	if tip != "" && !menu_open() {
 		w := text_width(tip, 20)
 		tx := (px - w) / 2
@@ -189,7 +202,9 @@ draw_shop :: proc() {
 	w: f32 = 620
 	rows := 0
 	for h in s.hold do rows += 1 if h > 0 else 0
-	h := f32(170 + max(rows, 1) * 26)
+	fav, at_village := village_fav()
+	at_village = at_village && s.at_village
+	h := f32(170 + max(rows, 1) * 26 + (30 if at_village else 0))
 	x := (world_w - w) / 2
 	y := (f32(rl.GetScreenHeight()) - h) / 2
 	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
@@ -197,9 +212,15 @@ draw_shop :: proc() {
 
 	cx := x + 20
 	cy := y + 16
-	text("LOJISTA", cx, cy, 20, COLOR_ACCENT)
-	cy += 26
-	text("\"Peixe fresco? Pago o preço do dia, marujo.\"", cx, cy, 20, COLOR_QUIET)
+	if at_village {
+		text("LOJISTA DA VILA", cx, cy, 20, COLOR_VILLAGE)
+		cy += 26
+		text(fmt.tprintf("\"Aqui %s vale 25%% a mais, marujo.\"", species_name(fav)), cx, cy, 20, COLOR_QUIET)
+	} else {
+		text("LOJISTA", cx, cy, 20, COLOR_ACCENT)
+		cy += 26
+		text("\"Peixe fresco? Pago o preço do dia, marujo.\"", cx, cy, 20, COLOR_QUIET)
+	}
 	cy += 36
 
 	total: u32
@@ -210,11 +231,12 @@ draw_shop :: proc() {
 	for n, i in s.hold {
 		if n == 0 do continue
 		price := u32(s.prices[i])
+		if at_village && i == fav do price = price * 125 / 100 // mesma conta do servidor
 		value := price * u32(n)
 		total += value
 		text(fmt.tprintf("[%d] %s", i + 1, species_name(i)), cx, cy, 20, SPECIES[i].color)
 		text(fmt.tprintf("x%d", n), cx + 280, cy, 20, COLOR_INK)
-		text(money_text(price), cx + 350, cy, 20, COLOR_QUIET)
+		text(money_text(price), cx + 350, cy, 20, COLOR_VILLAGE if at_village && i == fav else COLOR_QUIET)
 		v := money_text(value)
 		text(v, x + w - 20 - text_width(v, 20), cy, 20, COLOR_INK)
 		cy += 26
@@ -222,6 +244,17 @@ draw_shop :: proc() {
 	cy += 10
 	text(fmt.tprintf("[T] Vender tudo por %s", money_text(total)), cx, cy, 20, COLOR_ACCENT)
 	cy += 30
+	// Na vila não tem estaleiro, mas o lojista conserta.
+	if at_village {
+		missing := s.hp_max - s.hp
+		if missing > 0 {
+			cost := money_text(u32(missing * REPAIR_CENTS_PER_HP))
+			text(fmt.tprintf("[R] Consertar %d de vida por %s", missing, cost), cx, cy, 20, COLOR_ACCENT)
+		} else {
+			text("Casco inteiro, nada para consertar.", cx, cy, 20, COLOR_QUIET)
+		}
+		cy += 30
+	}
 	text("Número vende a espécie.  E ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
 }
 
