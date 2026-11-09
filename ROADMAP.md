@@ -5,14 +5,14 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 ## Como fazer cada nova versão
 
 1. Atualize o código: `git checkout main && git pull`.
-2. Crie um branch para a versão: `git checkout -b v0.6-npcs`.
+2. Crie um branch para a versão: `git checkout -b v0.7-ecossistema`.
 3. Um commit por passo, no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português: `tipo(escopo): descrição`. Exemplos: `feat(pesca): rede pega dois peixes por vez`, `fix(rede): ignorar mensagem curta`. Tipos: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`, `perf`. Escopos comuns: `cliente`, `servidor`, `esp32`, `protocolo`, `mapa`, `pesca`, `loja`.
 4. Se mudar mensagens da rede, atualize **os dois lados** (`protocol.h` e `protocol.odin`), o `docs/protocol.md` e aumente `PROTOCOL_VERSION`.
 5. Se mudar a geração do mapa, mude `world.c` **e** `world.odin` juntos. O checksum no `S_WELCOME` acusa se ficaram diferentes.
 6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e, quando der, no ESP32.
 7. Escreva o que mudou no `CHANGELOG.md`.
 8. Abra um Pull Request no GitHub. O Bertola revisa o código antes de qualquer merge na `main`.
-9. Crie a tag da versão: `git tag v0.6.0 && git push --tags`.
+9. Crie a tag da versão: `git tag v0.7.0 && git push --tags`.
 10. Campo novo no `profile_t` vai sempre no fim, e o `profile_upgrade` em `storage.h` aprende a converter o perfil da versão anterior. Assim ninguém perde a conta.
 
 ## Visão geral
@@ -24,8 +24,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.3 | Contas com senha, inventário e itens procedurais | Pronta |
 | v0.4 | Upgrades do barco | Pronta |
 | v0.5 | Armas, PvP, morte e drops (bag e coroa) | Pronta |
-| v0.6 | Sereia, mercenário e mecânico | Próxima |
-| v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | |
+| v0.6 | Sereia, mercenário e mecânico | Pronta |
+| v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | Próxima |
 | v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | |
 | v0.9 | Shaders de água, luz e clima; polimento | |
 | v1.0 | Lançamento | |
@@ -85,11 +85,17 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 
 **Pronta quando:** dois jogadores fora da zona segura trocam tiros, um afunda, e o outro pega a bag e a coroa que caíram.
 
-## v0.6: Sereia, mercenário e mecânico
+## v0.6: Sereia, mercenário e mecânico (pronta)
 
-- [ ] **Mercenário:** entregar a bag de outro jogador dá os peixes dela para você
-- [ ] **Sereia:** roleta da sorte que pode roubar ou dar a missão "derrote o jogador X"; levar a coroa do alvo encanta um item aleatório
-- [ ] **Mecânico:** combina dois itens do mesmo tipo usando o gerador procedural
+**Objetivo:** dar uso para o saque do PvP e um jeito de melhorar os itens.
+
+- [x] **Mercenário:** entregar a bag de outro jogador dá os peixes dela para você (e as coroas viram recompensa)
+- [x] **Sereia:** roleta da sorte que pode roubar ou dar a missão "derrote o jogador X"; levar a coroa do alvo encanta um item aleatório
+- [x] **Mecânico:** combina dois itens do mesmo tipo usando o gerador procedural
+- [x] A sereia mora numa pedra em mar aberto, com zona segura em volta
+- [x] Perfis da v0.5 convertidos, sem perder contas
+
+**Pronta quando:** um jogador afunda o alvo da missão, leva a coroa para a sereia e vê o item encantado no inventário; e o mecânico junta dois itens iguais num de raridade maior.
 
 ## v0.7: Ecossistema vivo
 
