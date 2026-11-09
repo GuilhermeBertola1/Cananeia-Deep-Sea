@@ -55,6 +55,19 @@
 #define SHARK_SPEED_WANDER 3      // células por segundo, passeando
 #define SHARK_SPEED_CHASE 7       // e caçando: o barco de fábrica faz 5
 #define SHARK_BOUNTY_CENTS 1500   // $15 por tubarão afundado
+// Eventos do mundo: de tempos em tempos acontece um, anunciado para todos.
+#define EVENT_FIRST (2 * 60 * TICK_HZ) // o primeiro vem entre 2 e 4 min
+#define EVENT_GAP (4 * 60 * TICK_HZ)   // depois, um a cada 4 a 8 min
+#define EVENT_MIN_DIST 40              // longe do porto
+#define STORM_R 25
+#define STORM_TIME (120 * TICK_HZ)
+#define STORM_DRIFT_EVERY (2 * TICK_HZ) // a tempestade anda 1 célula a cada 2 s
+#define STORM_PUSH_EVERY TICK_HZ        // o vento empurra o barco 1 célula por segundo
+#define STORM_HURT_EVERY (2 * TICK_HZ)  // as ondas tiram 1 de vida a cada 2 s
+#define STORM_CATCH_PCT 200             // mas o peixe sobe: pesca em dobro
+#define SQUID_R 20
+#define SQUID_TIME (90 * TICK_HZ)
+#define SQUID_SCHOOLS 6
 
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
@@ -139,6 +152,14 @@ typedef struct {
     uint8_t bite;        // ticks até poder morder de novo
 } predator_t;
 
+// O evento do mundo que está acontecendo agora (só um por vez).
+typedef struct {
+    uint8_t kind;  // WORLD_* (WORLD_NONE = nada acontecendo)
+    int16_t x, y, r;
+    int8_t dx, dy; // para onde sopra o vento da tempestade
+    uint32_t ends; // tick em que acaba
+} world_event_t;
+
 enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
 
 // Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
@@ -163,6 +184,8 @@ static struct {
     int village_count; // quantas couberam no mapa (normalmente todas)
     predator_t predators[MAX_PREDATORS];
     uint32_t next_shark; // tick em que pode nascer outro tubarão
+    world_event_t event;
+    uint32_t next_event; // tick em que começa o próximo evento
 } g;
 
 static uint8_t out[1024];
@@ -1180,6 +1203,101 @@ static void update_predators(void) {
     }
 }
 
+// --- eventos do mundo ----------------------------------------------------------
+
+static void event_all(uint8_t kind, uint8_t species, uint16_t count, uint32_t value) {
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_event(i, kind, species, count, value);
+}
+
+// A célula está dentro do evento `kind`? Zona segura nunca está.
+static int in_event(uint8_t kind, int x, int y) {
+    if (g.event.kind != kind || in_safe_zone(x, y)) return 0;
+    int dx = x - g.event.x, dy = y - g.event.y;
+    return dx * dx + dy * dy <= g.event.r * g.event.r;
+}
+
+// Um lugar no mar aberto, longe do porto, com o tile pedido no centro.
+static int event_spot(int deep_only, int *ox, int *oy) {
+    for (int tries = 0; tries < 500; tries++) {
+        int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+        tile_t t = tile(x, y);
+        if (deep_only ? t != TILE_DEEP : !tile_is_water(t)) continue;
+        if (!far_from(x, y, PORT_X, PORT_Y, EVENT_MIN_DIST) || in_safe_zone(x, y)) continue;
+        *ox = x, *oy = y;
+        return 1;
+    }
+    return 0;
+}
+
+// Maré de lulas: cardumes de lula-gigante aparecem juntos em água funda, e a
+// região fica com o estoque cheio.
+static void squid_tide(void) {
+    int r = g.event.r;
+    for (int i = 0, made = 0; i < 300 && made < SQUID_SCHOOLS; i++) {
+        int x = g.event.x + (int)rnd_below((uint32_t)(2 * r + 1)) - r;
+        int y = g.event.y + (int)rnd_below((uint32_t)(2 * r + 1)) - r;
+        if (!in_event(WORLD_SQUID, x, y) || tile(x, y) != TILE_DEEP) continue;
+        g.schools[made++] = (school_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .r = (uint8_t)(3 + rnd_below(3)),
+                                       .species = FISH_LULA, .expires = g.event.ends};
+        *stock_at(x, y) = STOCK_MAX;
+    }
+    send_marks(-1);
+}
+
+static void start_event(uint8_t kind) {
+    int x, y;
+    if (!event_spot(kind == WORLD_SQUID, &x, &y)) { g.next_event = g.tick + EVENT_GAP; return; }
+    int dir = (int)rnd_below(8);
+    g.event = (world_event_t){
+        .kind = kind,
+        .x = (int16_t)x,
+        .y = (int16_t)y,
+        .r = kind == WORLD_STORM ? STORM_R : SQUID_R,
+        .dx = DIR_X[dir],
+        .dy = DIR_Y[dir],
+        .ends = g.tick + (kind == WORLD_STORM ? STORM_TIME : SQUID_TIME),
+    };
+    if (kind == WORLD_SQUID) squid_tide();
+    // `count` = segundos que dura, `value` = onde (x nos 16 bits de baixo, y nos de cima).
+    event_all(EV_WORLD_START, kind, (uint16_t)((g.event.ends - g.tick) / TICK_HZ), (uint32_t)x | (uint32_t)y << 16);
+}
+
+static void end_event(void) {
+    uint8_t kind = g.event.kind;
+    g.event = (world_event_t){0};
+    g.next_event = g.tick + EVENT_GAP + rnd_below(EVENT_GAP);
+    event_all(EV_WORLD_END, kind, 0, 0);
+}
+
+static void update_world(void) {
+    if (g.event.kind && g.tick >= g.event.ends) end_event();
+    if (!g.event.kind && g.tick >= g.next_event) start_event(rnd_below(2) ? WORLD_STORM : WORLD_SQUID);
+    // A tempestade anda com o vento, sem sair do mapa.
+    if (g.event.kind == WORLD_STORM && g.tick % STORM_DRIFT_EVERY == 0) {
+        int nx = g.event.x + g.event.dx, ny = g.event.y + g.event.dy;
+        if (nx < 0 || nx >= MAP_W) g.event.dx = (int8_t)-g.event.dx, nx = g.event.x;
+        if (ny < 0 || ny >= MAP_H) g.event.dy = (int8_t)-g.event.dy, ny = g.event.y;
+        g.event.x = (int16_t)nx;
+        g.event.y = (int16_t)ny;
+    }
+}
+
+// Barco dentro da tempestade: o vento empurra e as ondas castigam o casco.
+// Como bater na costa, isso só avaria o barco, não afunda.
+static void storm(int slot) {
+    player_t *p = &g.players[slot];
+    if (g.tick % STORM_PUSH_EVERY == 0) {
+        int nx = p->x + g.event.dx, ny = p->y + g.event.dy;
+        if (tile_is_sailable(tile(nx, ny))) p->x = (int16_t)nx, p->y = (int16_t)ny;
+    }
+    if (g.tick % STORM_HURT_EVERY == 0 && hp(p) > 0) {
+        prof(p)->damage++;
+        update_stats(p);
+        if (hp(p) == 0) send_event(slot, EV_BROKEN, FISH_NONE, 0, 0);
+    }
+}
+
 static void update_player(int slot) {
     player_t *p = &g.players[slot];
     // Inércia: com tecla apertada acelera 1 célula/s por tick; soltou,
@@ -1205,6 +1323,8 @@ static void update_player(int slot) {
         p->blocked = 0;
     }
     if (p->vel == 0) p->move_budget = 0;
+    int in_storm = in_event(WORLD_STORM, p->x, p->y);
+    if (in_storm) storm(slot);
     prof(p)->x = p->x;
     prof(p)->y = p->y;
     pick_up(slot);
@@ -1213,6 +1333,7 @@ static void update_player(int slot) {
     int production = p->stats[STAT_PRODUCTION] > -100 ? p->stats[STAT_PRODUCTION] : -100;
     uint32_t passive = (uint32_t)(PASSIVE_CATCH_PCT * 10 * (100 + production) / 100);
     uint32_t school = (uint32_t)(SCHOOL_CATCH_PCT * 10 * (100 + production) / 100);
+    if (in_storm) passive = passive * STORM_CATCH_PCT / 100, school = school * STORM_CATCH_PCT / 100;
     if (moved && chance_permille(with_stock(passive, p->x, p->y))) {
         uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
         if (sp != FISH_NONE) add_fish(slot, sp, 1);
@@ -1456,6 +1577,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
     for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
+    g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
 }
 
 int game_connect(void) {
@@ -1530,6 +1652,7 @@ void game_save_all(void) {
 void game_tick(void) {
     g.tick++;
     if (g.tick % STOCK_REGEN_EVERY == 0) regen_stock();
+    update_world();
     update_schools();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) update_player(i);
