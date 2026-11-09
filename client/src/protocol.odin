@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 4
+PROTOCOL_VERSION :: 5
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -16,6 +16,7 @@ C_EQUIP :: 0x04
 C_DISCARD :: 0x05
 C_UPGRADE :: 0x06
 C_REPAIR :: 0x07
+C_FIRE :: 0x08
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -48,10 +49,24 @@ EV_BROKEN :: 9
 EV_UPGRADED :: 10
 EV_REPAIRED :: 11
 EV_NO_MONEY :: 12
+EV_HIT :: 13
+EV_HURT :: 14
+EV_SAFE_ZONE :: 15
+EV_KILL :: 16
+EV_DIED :: 17
+EV_LOOT :: 18
+EV_LOOT_FULL :: 19
 
 MARK_SCHOOL :: 1
+MARK_BAG :: 2
+MARK_CROWN :: 3
 STATE_AT_DOCK :: 1 << 0
 STATE_BROKEN :: 1 << 1
+STATE_SAFE :: 1 << 2
+
+LOOT_NONE :: 0
+LOOT_BAG :: 1
+LOOT_CROWN :: 2
 
 // Leitor com limite: se a mensagem vier curta, `ok` vira false e tudo lê 0.
 Reader :: struct {
@@ -130,5 +145,12 @@ send_upgrade :: proc(part: u8) {
 
 send_repair :: proc() {
 	buf := [1]u8{C_REPAIR}
+	net_send(buf[:])
+}
+
+// Atira na célula (x, y) do mundo. O servidor confere arma, recarga e zona segura.
+send_fire :: proc(x, y: i32) {
+	if x < 0 || y < 0 do return
+	buf := [5]u8{C_FIRE, u8(x), u8(x >> 8), u8(y), u8(y >> 8)}
 	net_send(buf[:])
 }

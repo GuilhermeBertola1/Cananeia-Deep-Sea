@@ -274,6 +274,17 @@ static void send_inventory(int slot) {
         for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, info.stats[s]);
     }
     for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, p->stats[s]);
+    put_u16(&w, pr->kills);
+    put_u16(&w, pr->deaths);
+    put_u8(&w, LOOT_SLOTS);
+    for (int i = 0; i < LOOT_SLOTS; i++) {
+        const loot_t *l = &pr->loot[i];
+        uint16_t fish = 0;
+        for (int f = 0; f < FISH_COUNT; f++) fish += l->fish[f];
+        put_u8(&w, l->kind);
+        put_u16(&w, fish);
+        put_name(&w, l->kind ? g.profiles[l->owner].name : "");
+    }
     send_w(slot, &w);
 }
 
@@ -337,9 +348,11 @@ static void send_state(int slot) {
     put_u16(&w, p->capacity);
     put_u8(&w, p->speed);
     put_u8(&w, p->vel);
-    put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0));
+    put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
+                   (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
+    put_u8(&w, p->reload);
     for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, pr->hold[i]);
 
     uint8_t online = 0;
@@ -356,6 +369,7 @@ static void send_state(int slot) {
         put_u16(&w, (uint16_t)o->x);
         put_u16(&w, (uint16_t)o->y);
         put_u8(&w, boat_look(prof(o)));
+        put_u8(&w, (uint8_t)(hp(o) * 100 / hp_max(o)));
         n++;
     }
     out[count_at] = n;
@@ -370,6 +384,19 @@ static void send_state(int slot) {
         put_u16(&w, s->y);
         put_u8(&w, s->r);
         put_u8(&w, s->species);
+        n++;
+    }
+    out[count_at] = n;
+
+    count_at = w.len;
+    put_u8(&w, 0);
+    n = 0;
+    for (int i = 0; i < MAX_SHOTS; i++) {
+        const shot_t *sh = &g.shots[i];
+        int x = shot_cell(sh->x), y = shot_cell(sh->y);
+        if (!sh->alive || !near(x, y, p->x, p->y, 0)) continue;
+        put_u16(&w, (uint16_t)x);
+        put_u16(&w, (uint16_t)y);
         n++;
     }
     out[count_at] = n;

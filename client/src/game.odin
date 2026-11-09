@@ -10,6 +10,9 @@ import rl "vendor:raylib"
 MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
+MAX_SHOTS :: 32
+MAX_MARKS :: 102 // cardumes (70) + bags e coroas (32)
+LOOT_SLOTS :: 4
 LOG_SIZE :: 6
 
 Screen :: enum {
@@ -30,9 +33,22 @@ Player_Info :: struct {
 }
 
 Boat :: struct {
-	id:   u8,
-	x, y: i32,
-	look: u8,
+	id:     u8,
+	x, y:   i32,
+	look:   u8,
+	hp_pct: u8, // vida em %, para a barrinha em cima do barco
+}
+
+Loot :: struct {
+	kind:      u8, // LOOT_NONE, LOOT_BAG ou LOOT_CROWN
+	fish:      int,
+	owner_buf: [NAME_MAX_LEN]u8,
+	owner_len: int,
+}
+
+// Nome de quem morreu e deixou o saque.
+loot_owner :: proc(l: ^Loot) -> string {
+	return string(l.owner_buf[:l.owner_len])
 }
 
 School :: struct {
@@ -94,6 +110,10 @@ State :: struct {
 	at_dock:       bool,
 	hp, hp_max:    int,
 	broken:        bool,
+	safe:          bool, // zona segura: ninguém atira nem toma tiro
+	reload:        int,  // ticks até poder atirar de novo
+	kills, deaths: int,
+	loot:          [LOOT_SLOTS]Loot,
 	boat_level:    [PART_COUNT]int,
 	hold:          [FISH_COUNT]int,
 	bag:           [BAG_SIZE]Item,
@@ -110,7 +130,9 @@ State :: struct {
 	boat_count:    int,
 	schools:       [MAX_SCHOOLS]School,
 	school_count:  int,
-	marks:         [MAX_SCHOOLS]Mark,
+	shots:         [MAX_SHOTS][2]i32,
+	shot_count:    int,
+	marks:         [MAX_MARKS]Mark,
 	mark_count:    int,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
@@ -504,7 +526,7 @@ on_net_message :: proc(data: []u8) {
 	case S_MARKS:
 		n := int(read_u8(&r))
 		s.mark_count = 0
-		for _ in 0 ..< min(n, MAX_SCHOOLS) {
+		for _ in 0 ..< min(n, MAX_MARKS) {
 			m := Mark{x = i32(read_u16(&r)), y = i32(read_u16(&r)), kind = read_u8(&r), species = read_u8(&r)}
 			if !r.ok do break
 			s.marks[s.mark_count] = m
@@ -527,8 +549,19 @@ on_net_message :: proc(data: []u8) {
 		}
 		stats: [STAT_COUNT]int
 		for &v in stats do v = int(read_i16(&r))
+		kills, deaths := int(read_u16(&r)), int(read_u16(&r))
+		loot: [LOOT_SLOTS]Loot
+		n = int(read_u8(&r))
+		for i in 0 ..< n {
+			kind, fish := read_u8(&r), int(read_u16(&r))
+			name_buf: [NAME_MAX_LEN]u8
+			owner := read_name(&r, name_buf[:])
+			if i < LOOT_SLOTS do loot[i] = Loot{kind = kind, fish = fish, owner_buf = name_buf, owner_len = len(owner)}
+		}
 		if !r.ok do return
 		s.bag, s.stats = bag, stats
+		s.kills, s.deaths = kills, deaths
+		s.loot = loot
 
 	case S_BOAT:
 		levels: [PART_COUNT]int
@@ -553,15 +586,17 @@ read_state :: proc(r: ^Reader) {
 	flags := read_u8(r)
 	s.at_dock = flags & STATE_AT_DOCK != 0
 	s.broken = flags & STATE_BROKEN != 0
+	s.safe = flags & STATE_SAFE != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
+	s.reload = int(read_u8(r))
 	for &h in s.hold do h = int(read_u16(r))
 	s.online = int(read_u8(r))
 
 	n := int(read_u8(r))
 	s.boat_count = 0
 	for _ in 0 ..< min(n, MAX_PLAYERS) {
-		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), look = read_u8(r)}
+		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), look = read_u8(r), hp_pct = read_u8(r)}
 		if !r.ok || b.id >= MAX_PLAYERS do break
 		s.boats[s.boat_count] = b
 		s.boat_count += 1
@@ -574,5 +609,14 @@ read_state :: proc(r: ^Reader) {
 		if !r.ok do break
 		s.schools[s.school_count] = sc
 		s.school_count += 1
+	}
+
+	n = int(read_u8(r))
+	s.shot_count = 0
+	for _ in 0 ..< min(n, MAX_SHOTS) {
+		shot := [2]i32{i32(read_u16(r)), i32(read_u16(r))}
+		if !r.ok do break
+		s.shots[s.shot_count] = shot
+		s.shot_count += 1
 	}
 }

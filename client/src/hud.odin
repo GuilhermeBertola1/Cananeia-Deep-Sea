@@ -63,6 +63,7 @@ nearest_target :: proc() -> (string, bool) {
 	best := -1
 	best_d2: i32 = max(i32)
 	for m, i in s.marks[:s.mark_count] {
+		if m.kind != MARK_SCHOOL do continue // bags e coroas também são marcas
 		dx, dy := m.x - s.x, m.y - s.y
 		if d2 := dx * dx + dy * dy; d2 < best_d2 {best, best_d2 = i, d2}
 	}
