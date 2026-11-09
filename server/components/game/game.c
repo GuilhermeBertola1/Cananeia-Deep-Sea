@@ -25,6 +25,7 @@
 #define DROP_LIFE (5 * 60 * TICK_HZ) // bag e coroa somem do mar em 5 minutos
 // Posição do tiro em 1/256 de célula, para andar em qualquer ângulo só com inteiros.
 #define SUB 256
+#define CROWN_BOUNTY_CENTS 2500 // o mercenário paga $25 por coroa
 
 // Mercado: vender 200 de uma espécie derruba o preço pela metade,
 // nunca abaixo de 30%, e a pressão cai 1% por segundo.
@@ -587,6 +588,43 @@ static void repair(int slot) {
     send_rank(-1);
 }
 
+// Mercenário: fica com as bags dos outros e passa os peixes delas para o
+// seu porão, até encher. Por coroa ele paga uma recompensa, menos pela do
+// alvo da sereia: essa é ela quem quer.
+static void mercenary(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!at_dock(p)) return;
+    int got = 0, crowns = 0, left = 0;
+    for (int i = 0; i < LOOT_SLOTS; i++) {
+        loot_t *l = &pr->loot[i];
+        if (l->kind == LOOT_CROWN) {
+            if (pr->has_mission && l->owner == pr->mission_target) continue;
+            crowns++;
+            *l = (loot_t){0};
+        } else if (l->kind == LOOT_BAG) {
+            int rest = 0;
+            for (int f = 0; f < FISH_COUNT; f++) {
+                int room = p->capacity - hold_count(p);
+                int n = room <= 0 ? 0 : l->fish[f] < room ? l->fish[f] : room;
+                pr->hold[f] += n;
+                l->fish[f] -= n;
+                got += n;
+                rest += l->fish[f];
+            }
+            if (rest) left = 1; // porão cheio: a bag fica com o resto
+            else *l = (loot_t){0};
+        }
+    }
+    if (!got && !crowns) { send_event(slot, EV_MERC_NOTHING, (uint8_t)left, 0, 0); return; }
+    uint32_t bounty = (uint32_t)crowns * CROWN_BOUNTY_CENTS;
+    pr->money += bounty;
+    storage_save(p->profile, pr);
+    send_event(slot, EV_MERC, (uint8_t)left, (uint16_t)got, bounty);
+    send_inventory(slot);
+    if (bounty) send_rank(-1);
+}
+
 static int try_move(player_t *p) {
     int dx = DIR_X[p->heading], dy = DIR_Y[p->heading];
     int nx = p->x + dx, ny = p->y + dy;
@@ -1031,6 +1069,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_FIRE:
         if (len >= 5) fire(slot, data[1] | data[2] << 8, data[3] | data[4] << 8);
+        break;
+    case C_MERC:
+        mercenary(slot);
         break;
     }
 }
