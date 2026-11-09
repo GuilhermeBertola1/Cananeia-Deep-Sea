@@ -11,7 +11,8 @@ MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 103 // cardumes (70) + bags e coroas (32) + a sereia
+MAX_MARKS :: 106 // cardumes (70) + bags e coroas (32) + a sereia + 3 vilas
+MAX_PREDATORS :: 12
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
 LOG_SIZE :: 6
@@ -60,6 +61,22 @@ School :: struct {
 Mark :: struct {
 	x, y:          i32,
 	kind, species: u8,
+}
+
+// Tubarão ou navio fantasma perto do barco.
+Predator :: struct {
+	kind:   u8, // PRED_SHARK ou PRED_GHOST
+	x, y:   i32,
+	hp_pct: u8,
+}
+
+// O evento do mundo que está acontecendo (kind = WORLD_NONE quando não tem).
+World_Event :: struct {
+	kind:   u8,
+	x, y:   i32,
+	radius: i32,
+	secs:   int, // segundos que faltam
+	dx, dy: i32, // vento da tempestade
 }
 
 Rank_Entry :: struct {
@@ -113,6 +130,8 @@ State :: struct {
 	broken:        bool,
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
 	at_mermaid:    bool, // perto da pedra da sereia
+	at_village:    bool, // no cais de uma vila: vende e conserta
+	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
 	loot:          [LOOT_SLOTS]Loot,
@@ -140,6 +159,9 @@ State :: struct {
 	shot_count:    int,
 	marks:         [MAX_MARKS]Mark,
 	mark_count:    int,
+	predators:     [MAX_PREDATORS]Predator,
+	pred_count:    int,
+	world:         World_Event,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
 	prices:        [FISH_COUNT]int,
@@ -771,6 +793,7 @@ read_state :: proc(r: ^Reader) {
 	s.broken = flags & STATE_BROKEN != 0
 	s.safe = flags & STATE_SAFE != 0
 	s.at_mermaid = flags & STATE_AT_MERMAID != 0
+	s.at_village = flags & STATE_AT_VILLAGE != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))
@@ -803,4 +826,20 @@ read_state :: proc(r: ^Reader) {
 		s.shots[s.shot_count] = shot
 		s.shot_count += 1
 	}
+
+	// Desde a v7: estoque da região, bichos e o evento do mundo.
+	s.stock_pct = int(read_u8(r))
+	n = int(read_u8(r))
+	s.pred_count = 0
+	for _ in 0 ..< min(n, MAX_PREDATORS) {
+		p := Predator{kind = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), hp_pct = read_u8(r)}
+		if !r.ok do break
+		s.predators[s.pred_count] = p
+		s.pred_count += 1
+	}
+	ev := World_Event{kind = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), radius = i32(read_u8(r))}
+	ev.secs = int(read_u16(r))
+	ev.dx = i32(i8(read_u8(r)))
+	ev.dy = i32(i8(read_u8(r)))
+	if r.ok do s.world = ev
 }

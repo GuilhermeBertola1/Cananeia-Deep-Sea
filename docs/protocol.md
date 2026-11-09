@@ -23,11 +23,11 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | --- | --- | --- |
 | `0x01` | `C_JOIN` | `u8` versão do protocolo, `nome`, `senha`. Nome novo cria o perfil com essa senha |
 | `0x02` | `C_INPUT` | `i8` dx, `i8` dy (−1, 0 ou 1). Mandado só quando a direção muda |
-| `0x03` | `C_SELL` | `u8` espécie (`0xFF` = vender tudo). Só funciona no cais |
+| `0x03` | `C_SELL` | `u8` espécie (`0xFF` = vender tudo). Só no cais do porto ou de uma vila |
 | `0x04` | `C_EQUIP` | `u8` índice na bolsa (0 a 11). Equipa no slot do tipo do item; se já estiver equipado, desequipa |
 | `0x05` | `C_DISCARD` | `u8` índice na bolsa. Joga o item fora (desequipa antes) |
 | `0x06` | `C_UPGRADE` | `u8` peça (0 vela, 1 casco, 2 leme). Compra o próximo nível no estaleiro. Só no cais |
-| `0x07` | `C_REPAIR` | Conserta o barco inteiro no estaleiro. Só no cais |
+| `0x07` | `C_REPAIR` | Conserta o barco inteiro. Só no cais do porto ou de uma vila |
 | `0x08` | `C_FIRE` | `u16` x, `u16` y: célula do mundo para onde atirar. Precisa de arma equipada, recarga zerada e estar fora da zona segura |
 | `0x09` | `C_MERC` | Entrega o saque ao mercenário: os peixes das bags vão para o porão e as coroas viram recompensa. Só no cais |
 | `0x0A` | `C_MERMAID` | `u8` ação: 0 fala (gira a roleta ou entrega a coroa da missão), 1 desiste da missão. Só perto da sereia |
@@ -58,7 +58,8 @@ u16 capacidade do porão
 u8  velocidade máxima (células/s)
 u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
 u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
-                        bit 2 = zona segura, bit 3 = perto da sereia
+                        bit 2 = zona segura, bit 3 = perto da sereia,
+                        bit 4 = no cais de uma vila
 u16 vida, u16 vida máxima
 u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
@@ -67,6 +68,14 @@ u8  n, n × (u8 id, u16 x, u16 y, u8 visual, u8 vida%)   outros barcos a até 50
                         visual = nível do casco × 16 + nível da vela
 u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
 u8  n, n × (u16 x, u16 y)                        tiros voando a até 50 células
+u8  estoque%            peixe que sobrou na região onde o barco está (0 a 100)
+u8  n, n × (u8 tipo, u16 x, u16 y, u8 vida%)     bichos a até 50 células (0 tubarão, 1 navio fantasma)
+evento do mundo (sempre vem, 10 bytes):
+    u8  tipo            0 nenhum, 1 tempestade, 2 maré de lulas, 3 navio fantasma
+    u16 x, u16 y        centro (no navio fantasma, onde ele está)
+    u8  raio
+    u16 segundos que faltam
+    i8  vento dx, i8 vento dy   para onde a tempestade anda (−1, 0 ou 1)
 ```
 
 ### Eventos (`S_EVENT`)
@@ -86,10 +95,10 @@ u8  n, n × (u16 x, u16 y)                        tiros voando a até 50 célula
 | 11 | consertou: `quantidade` = vida recuperada, `valor` = preço |
 | 12 | dinheiro não dá: `valor` = preço |
 | 13 | seu tiro acertou: `espécie` = id do alvo, `quantidade` = dano, `valor` = vida que sobrou nele |
-| 14 | você tomou um tiro: `espécie` = id de quem atirou, `quantidade` = dano, `valor` = vida que sobrou |
+| 14 | você tomou um tiro: `espécie` = id de quem atirou (ou `0x81`, o navio fantasma), `quantidade` = dano, `valor` = vida que sobrou |
 | 15 | não dá para atirar na zona segura |
 | 16 | você afundou alguém: `espécie` = id do alvo |
-| 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu), `quantidade` = peixes que ficaram na bag |
+| 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu; `0x80` tubarão, `0x81` navio fantasma), `quantidade` = peixes que ficaram na bag |
 | 18 | pegou um saque: `espécie` = tipo (1 bag, 2 coroa), `quantidade` = 1 se era seu |
 | 19 | achou um saque, mas o barco já carrega 4 |
 | 20 | mercenário: `quantidade` = peixes que foram para o porão, `valor` = recompensa pelas coroas, `espécie` = 1 se sobrou peixe na bag (porão cheio) |
@@ -105,6 +114,11 @@ u8  n, n × (u16 x, u16 y)                        tiros voando a até 50 célula
 | 30 | desistiu da missão |
 | 31 | mecânico: `espécie` = tipo do item novo, `quantidade` = raridade, `valor` = preço |
 | 32 | mecânico: os dois itens precisam ser do mesmo tipo |
+| 33 | um bicho te mordeu: `espécie` = tipo do bicho, `quantidade` = dano, `valor` = vida que sobrou |
+| 34 | seu tiro acertou um bicho: `espécie` = tipo, `quantidade` = dano, `valor` = vida que sobrou nele |
+| 35 | você afundou um bicho: `espécie` = tipo, `valor` = recompensa; no navio fantasma, `quantidade` = seu dano e `valor` = sua parte |
+| 36 | começou um evento do mundo: `espécie` = tipo, `quantidade` = segundos, `valor` = x + y × 65536 |
+| 37 | o evento do mundo acabou: `espécie` = tipo |
 
 ### `S_INVENTORY`
 
@@ -200,8 +214,19 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 | 2 bag | 0 |
 | 3 coroa | 0 |
 | 4 sereia | 0 |
+| 5 vila de pescadores | espécie que ela paga 25% mais caro |
 
 Bosses e outros NPCs entram aqui como tipos novos.
+
+### Ecossistema e eventos do mundo
+
+- **Estoque de peixe**: o mapa é dividido em 16 × 16 regiões de 32 × 32 células, cada uma com até 250 peixes. Pescar tira do estoque, e a chance de pescar é multiplicada por `estoque / 250`. O estoque cresce sozinho a cada 5 s (devagar quando está vazio ou cheio, rápido no meio): uma região vazia volta em uns 6 minutos. Cardumes nascem mais onde tem peixe e vão embora quando a região cai abaixo de 20%.
+- **Vilas** (3, entre 60 e 200 células do porto, na costa de outras ilhas, sempre no mesmo lugar para a mesma semente; zona segura de 10 células): o lojista e o reparo funcionam, e a vila paga 25% a mais pela espécie preferida. Estaleiro, mercenário e mecânico só no porto.
+- **Tubarões** (10 no mar, um novo a cada 30 s se faltar): só nadam em água funda ou normal, fora das zonas seguras. Caçam o barco mais perto a até 15 células que tenha menos de 120 de vida, a 7 células/s, e mordem 8 de vida a cada 1,5 s. Vida 0 por mordida é morte. 40 de vida; afundar um vale $15.
+- **Eventos**: um por vez, o primeiro de 2 a 4 min depois de o servidor ligar e depois um a cada 4 a 8 min, sempre a 40 células ou mais do porto e nunca dentro de zona segura.
+  - **Tempestade** (2 min, raio 25): anda 1 célula a cada 2 s com o vento; empurra o barco 1 célula por segundo e tira 1 de vida a cada 2 s (só avaria, não afunda); a pesca dentro dela vale o dobro.
+  - **Maré de lulas** (1 min 30 s, raio 20, em água funda): 6 cardumes de lula-gigante e o estoque da região cheio.
+  - **Navio fantasma** (2 min 30 s): vê qualquer barco a até 20 células, chega a 6 e atira 10 de dano a cada 2 s (alcance 12). 300 de vida; afundá-lo dá $300 divididos pelo dano de cada um e um baú para cada um que acertou. Se o tempo acabar, ele some.
 
 ## Senhas
 

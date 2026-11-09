@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 6
+PROTOCOL_VERSION :: 7
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -72,15 +72,32 @@ EV_NOTHING_TO_ENCHANT :: 29
 EV_MISSION_GIVE_UP :: 30
 EV_COMBINED :: 31
 EV_CANT_COMBINE :: 32
+EV_BITTEN :: 33
+EV_PREDATOR_HIT :: 34
+EV_PREDATOR_KILL :: 35
+EV_WORLD_START :: 36
+EV_WORLD_END :: 37
+
+// No EV_DIED e no EV_HURT, quem atacou: id do jogador ou KILLER_PREDATOR + tipo do bicho.
+KILLER_PREDATOR :: 0x80
+PRED_SHARK :: 0
+PRED_GHOST :: 1
+
+WORLD_NONE :: 0
+WORLD_STORM :: 1
+WORLD_SQUID :: 2
+WORLD_GHOST :: 3
 
 MARK_SCHOOL :: 1
 MARK_BAG :: 2
 MARK_CROWN :: 3
 MARK_MERMAID :: 4
+MARK_VILLAGE :: 5
 STATE_AT_DOCK :: 1 << 0
 STATE_BROKEN :: 1 << 1
 STATE_SAFE :: 1 << 2
 STATE_AT_MERMAID :: 1 << 3
+STATE_AT_VILLAGE :: 1 << 4
 
 MERMAID_TALK :: 0
 MERMAID_GIVE_UP :: 1

@@ -514,7 +514,8 @@ static void send_state(int slot) {
     put_u8(&w, p->speed);
     put_u8(&w, p->vel);
     put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
-                   (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0));
+                   (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0) |
+                   (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
     put_u8(&w, p->reload);
@@ -565,6 +566,31 @@ static void send_state(int slot) {
         n++;
     }
     out[count_at] = n;
+
+    // Desde a v7: estoque de peixe da região, bichos por perto e o evento do mundo.
+    put_u8(&w, (uint8_t)(*stock_at(p->x, p->y) * 100 / STOCK_MAX));
+    count_at = w.len;
+    put_u8(&w, 0);
+    n = 0;
+    for (int i = 0; i < MAX_PREDATORS; i++) {
+        const predator_t *pd = &g.predators[i];
+        if (!pd->alive || !near(pd->x, pd->y, p->x, p->y, 0)) continue;
+        int max = pd->kind == PRED_GHOST ? GHOST_HP : SHARK_HP;
+        put_u8(&w, pd->kind);
+        put_u16(&w, (uint16_t)pd->x);
+        put_u16(&w, (uint16_t)pd->y);
+        put_u8(&w, (uint8_t)(pd->hp * 100 / max));
+        n++;
+    }
+    out[count_at] = n;
+    const world_event_t *ev = &g.event;
+    put_u8(&w, ev->kind);
+    put_u16(&w, (uint16_t)ev->x);
+    put_u16(&w, (uint16_t)ev->y);
+    put_u8(&w, (uint8_t)ev->r);
+    put_u16(&w, (uint16_t)(ev->kind && ev->ends > g.tick ? (ev->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
+    put_u8(&w, (uint8_t)ev->dx);
+    put_u8(&w, (uint8_t)ev->dy);
     send_w(slot, &w);
 }
 
