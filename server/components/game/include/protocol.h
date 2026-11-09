@@ -52,7 +52,9 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_BITTEN = 33, EV_PREDATOR_HIT = 34, EV_PREDATOR_KILL = 35,
        EV_WORLD_START = 36, EV_WORLD_END = 37 };
 // Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
-enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2 };
+enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2, WORLD_GHOST = 3 };
+// Tipos de bicho (no EV_BITTEN, EV_PREDATOR_* e somados a KILLER_PREDATOR).
+enum { PRED_SHARK = 0, PRED_GHOST = 1 };
 // No EV_DIED, `espécie` é quem afundou: o id do jogador, ou KILLER_PREDATOR + tipo do bicho.
 #define KILLER_PREDATOR 0x80
 enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5 };

@@ -68,6 +68,19 @@
 #define SQUID_R 20
 #define SQUID_TIME (90 * TICK_HZ)
 #define SQUID_SCHOOLS 6
+// Navio fantasma: aparece como evento, atira em qualquer barco perto e só
+// afunda com muito dano. O prêmio é dividido pelo dano que cada um deu.
+#define GHOST_TIME (150 * TICK_HZ)
+#define GHOST_R 30                 // área anunciada em volta do navio
+#define GHOST_HP 300
+#define GHOST_SENSE 20             // de quantas células ele vê um barco
+#define GHOST_KEEP 6               // chega até essa distância e fica atirando
+#define GHOST_SPEED 4              // células por segundo
+#define GHOST_RANGE 12
+#define GHOST_RELOAD (2 * TICK_HZ)
+#define GHOST_DAMAGE 10
+#define GHOST_SHOT_SPEED 2
+#define GHOST_BOUNTY_CENTS 30000   // $300 divididos entre quem acertou
 
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
@@ -118,7 +131,7 @@ typedef struct {
 
 typedef struct {
     uint8_t alive;
-    uint8_t owner;       // slot de quem atirou
+    uint8_t owner;       // slot de quem atirou, ou KILLER_PREDATOR + tipo do bicho
     uint8_t speed;       // células por tick
     uint8_t left;        // células que ainda pode andar
     int32_t x, y;        // em 1/SUB de célula
@@ -139,8 +152,6 @@ typedef struct {
 typedef struct {
     int16_t x, y, r;
 } safe_zone_t;
-
-typedef enum { PRED_SHARK = 0 } predator_kind_t;
 
 typedef struct {
     uint8_t alive, kind;
@@ -186,6 +197,8 @@ static struct {
     uint32_t next_shark; // tick em que pode nascer outro tubarão
     world_event_t event;
     uint32_t next_event; // tick em que começa o próximo evento
+    int ghost;           // índice do navio fantasma em `predators` (-1 = não tem)
+    uint16_t ghost_dmg[MAX_PLAYERS]; // dano que cada slot deu nele
 } g;
 
 static uint8_t out[1024];
@@ -939,31 +952,38 @@ static const weapon_t *weapon(const player_t *p) {
     return weapon_of(pr->bag[pr->equipped[EQUIP_WEAPON] - 1].base);
 }
 
-static void fire(int slot, int tx, int ty) {
-    player_t *p = &g.players[slot];
-    const weapon_t *wp = weapon(p);
-    if (!wp || p->reload) return;
-    if (in_safe_zone(p->x, p->y)) { send_event(slot, EV_SAFE_ZONE, FISH_NONE, 0, 0); return; }
-    int dx = tx - p->x, dy = ty - p->y;
+// Um tiro de (x, y) na direção de (tx, ty). Serve para os barcos e para o
+// navio fantasma. Devolve 0 se não saiu (mira em cima de si ou mar lotado de tiros).
+static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed, uint8_t range, uint16_t damage) {
+    int dx = tx - x, dy = ty - y;
     uint32_t len = isqrt((uint32_t)(dx * dx + dy * dy));
-    if (len == 0) return;
+    if (len == 0) return 0;
     for (int i = 0; i < MAX_SHOTS; i++) {
         shot_t *sh = &g.shots[i];
         if (sh->alive) continue;
         *sh = (shot_t){
             .alive = 1,
-            .owner = (uint8_t)slot,
-            .speed = wp->speed,
-            .left = wp->range,
-            .x = p->x * SUB,
-            .y = p->y * SUB,
+            .owner = owner,
+            .speed = speed,
+            .left = range,
+            .x = x * SUB,
+            .y = y * SUB,
             .ux = dx * SUB / (int32_t)len,
             .uy = dy * SUB / (int32_t)len,
-            .damage = (uint16_t)(p->stats[STAT_DAMAGE] > 1 ? p->stats[STAT_DAMAGE] : 1),
+            .damage = damage,
         };
-        p->reload = wp->reload;
-        return;
+        return 1;
     }
+    return 0;
+}
+
+static void fire(int slot, int tx, int ty) {
+    player_t *p = &g.players[slot];
+    const weapon_t *wp = weapon(p);
+    if (!wp || p->reload) return;
+    if (in_safe_zone(p->x, p->y)) { send_event(slot, EV_SAFE_ZONE, FISH_NONE, 0, 0); return; }
+    uint16_t damage = (uint16_t)(p->stats[STAT_DAMAGE] > 1 ? p->stats[STAT_DAMAGE] : 1);
+    if (spawn_shot((uint8_t)slot, p->x, p->y, tx, ty, wp->speed, wp->range, damage)) p->reload = wp->reload;
 }
 
 // Joga um saque no mar, numa célula de água perto de (x, y). Com o mar
@@ -1022,12 +1042,12 @@ static void hit(int target, shot_t *sh) {
     player_t *t = &g.players[target];
     profile_t *pr = prof(t);
     int dmg = sh->damage;
-    int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
+    int shooter = sh->owner < MAX_PLAYERS && g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pr->damage = (uint16_t)(pr->damage + dmg > hp_max(t) ? hp_max(t) : pr->damage + dmg);
     send_event(target, EV_HURT, sh->owner, (uint16_t)dmg, (uint32_t)hp(t));
     if (shooter >= 0) send_event(shooter, EV_HIT, (uint8_t)target, (uint16_t)dmg, (uint32_t)hp(t));
     // Vida 0 por tiro é morte (na costa continua sendo só avaria).
-    if (hp(t) == 0) die(target, shooter);
+    if (hp(t) == 0) die(target, sh->owner >= KILLER_PREDATOR ? sh->owner : shooter);
 }
 
 // Passou por cima de uma bag ou coroa. A sua volta para você (os peixes
@@ -1071,16 +1091,18 @@ static void update_drops(void) {
     if (changed) send_marks(-1);
 }
 
-// Tiro num bicho. Quem afunda leva a recompensa.
+// Tiro num bicho. Quem afunda um tubarão leva a recompensa; o prêmio do
+// navio fantasma é dividido em update_world, por isso aqui só se anota o dano.
 static void hit_predator(predator_t *pd, const shot_t *sh) {
     int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pd->hp = (int16_t)(pd->hp - sh->damage);
+    if (pd->kind == PRED_GHOST && shooter >= 0) g.ghost_dmg[shooter] += sh->damage;
     if (pd->hp > 0) {
         if (shooter >= 0) send_event(shooter, EV_PREDATOR_HIT, pd->kind, sh->damage, (uint32_t)pd->hp);
         return;
     }
     pd->alive = 0;
-    if (shooter < 0) return;
+    if (shooter < 0 || pd->kind != PRED_SHARK) return;
     profile_t *pr = prof(&g.players[shooter]);
     pr->money += SHARK_BOUNTY_CENTS;
     send_event(shooter, EV_PREDATOR_KILL, pd->kind, 0, SHARK_BOUNTY_CENTS);
@@ -1105,7 +1127,8 @@ static void update_shots(void) {
                 sh->alive = 0;
                 break;
             }
-            for (int k = 0; sh->alive && k < MAX_PREDATORS; k++) {
+            // Tiro de bicho não acerta bicho.
+            for (int k = 0; sh->alive && sh->owner < MAX_PLAYERS && k < MAX_PREDATORS; k++) {
                 predator_t *pd = &g.predators[k];
                 if (!pd->alive || pd->y != cy || pd->x < cx - 1 || pd->x > cx + 1) continue;
                 hit_predator(pd, sh);
@@ -1117,9 +1140,12 @@ static void update_shots(void) {
 
 // --- predadores ---------------------------------------------------------------
 
-static int shark_water(int x, int y) {
+// O tubarão não entra no raso; o navio fantasma vai em qualquer água.
+// Nenhum dos dois entra em zona segura.
+static int pred_water(const predator_t *pd, int x, int y) {
     tile_t t = tile(x, y);
-    return (t == TILE_DEEP || t == TILE_WATER) && !in_safe_zone(x, y);
+    int ok = pd->kind == PRED_SHARK ? t == TILE_DEEP || t == TILE_WATER : tile_is_water(t);
+    return ok && !in_safe_zone(x, y);
 }
 
 // Presa: barco no jogo, com pouca vida e fora da zona segura.
@@ -1129,9 +1155,9 @@ static int is_prey(const player_t *p) {
 
 // Um passo de uma célula; na diagonal, desliza pela beira como o barco.
 static int pred_step(predator_t *pd, int dx, int dy) {
-    if (shark_water(pd->x + dx, pd->y + dy)) return pd->x += dx, pd->y += dy, 1;
-    if (dx && dy && shark_water(pd->x + dx, pd->y)) return pd->x += dx, 1;
-    if (dx && dy && shark_water(pd->x, pd->y + dy)) return pd->y += dy, 1;
+    if (pred_water(pd, pd->x + dx, pd->y + dy)) return pd->x += dx, pd->y += dy, 1;
+    if (dx && dy && pred_water(pd, pd->x + dx, pd->y)) return pd->x += dx, 1;
+    if (dx && dy && pred_water(pd, pd->x, pd->y + dy)) return pd->y += dy, 1;
     return 0;
 }
 
@@ -1159,13 +1185,48 @@ static void bite(int slot, const predator_t *pd) {
     if (hp(p) == 0) die(slot, KILLER_PREDATOR + pd->kind);
 }
 
+// Navio fantasma: chega perto do barco mais próximo (forte ou fraco) e atira.
+static void update_ghost(predator_t *pd) {
+    if (pd->target >= 0) {
+        const player_t *t = &g.players[pd->target];
+        if (t->state != SLOT_PLAYING || in_safe_zone(t->x, t->y) || far_from(t->x, t->y, pd->x, pd->y, GHOST_SENSE * 2))
+            pd->target = -1;
+    }
+    if (pd->target < 0 && g.tick % TICK_HZ == 0) {
+        int best = GHOST_SENSE * GHOST_SENSE + 1;
+        for (int t = 0; t < MAX_PLAYERS; t++) {
+            const player_t *p = &g.players[t];
+            int dx = p->x - pd->x, dy = p->y - pd->y;
+            if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
+                best = dx * dx + dy * dy, pd->target = (int8_t)t;
+        }
+    }
+    const player_t *prey = pd->target >= 0 ? &g.players[pd->target] : 0;
+    pd->move_budget += GHOST_SPEED;
+    while (pd->move_budget >= 10) {
+        pd->move_budget -= 10;
+        if (prey && far_from(prey->x, prey->y, pd->x, pd->y, GHOST_KEEP)) {
+            pred_step(pd, (prey->x > pd->x) - (prey->x < pd->x), (prey->y > pd->y) - (prey->y < pd->y));
+        } else if (!prey && (!pred_step(pd, DIR_X[pd->heading], DIR_Y[pd->heading]) || rnd_below(10) == 0)) {
+            pd->heading = (uint8_t)rnd_below(8);
+        }
+    }
+    // `bite` serve de recarga do canhão.
+    if (prey && !pd->bite && !far_from(prey->x, prey->y, pd->x, pd->y, GHOST_RANGE + 1)) {
+        if (spawn_shot(KILLER_PREDATOR + PRED_GHOST, pd->x, pd->y, prey->x, prey->y, GHOST_SHOT_SPEED, GHOST_RANGE + 2,
+                       GHOST_DAMAGE))
+            pd->bite = GHOST_RELOAD;
+    }
+}
+
 static void update_predators(void) {
     int alive = 0;
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (!pd->alive) continue;
-        alive++;
         if (pd->bite) pd->bite--;
+        if (pd->kind == PRED_GHOST) { update_ghost(pd); continue; }
+        alive++;
         // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
         if (pd->target >= 0) {
             const player_t *t = &g.players[pd->target];
@@ -1245,18 +1306,32 @@ static void squid_tide(void) {
     send_marks(-1);
 }
 
+// O navio fantasma ocupa uma vaga livre em `predators`. -1 se não tem vaga.
+static int spawn_ghost(int x, int y) {
+    for (int i = 0; i < MAX_PREDATORS; i++) {
+        predator_t *pd = &g.predators[i];
+        if (pd->alive) continue;
+        *pd = (predator_t){.alive = 1, .kind = PRED_GHOST, .x = (int16_t)x, .y = (int16_t)y, .hp = GHOST_HP,
+                           .target = -1, .heading = (uint8_t)rnd_below(8)};
+        memset(g.ghost_dmg, 0, sizeof g.ghost_dmg);
+        return i;
+    }
+    return -1;
+}
+
 static void start_event(uint8_t kind) {
     int x, y;
     if (!event_spot(kind == WORLD_SQUID, &x, &y)) { g.next_event = g.tick + EVENT_GAP; return; }
+    if (kind == WORLD_GHOST && (g.ghost = spawn_ghost(x, y)) < 0) { g.next_event = g.tick + EVENT_GAP; return; }
     int dir = (int)rnd_below(8);
     g.event = (world_event_t){
         .kind = kind,
         .x = (int16_t)x,
         .y = (int16_t)y,
-        .r = kind == WORLD_STORM ? STORM_R : SQUID_R,
+        .r = kind == WORLD_STORM ? STORM_R : kind == WORLD_SQUID ? SQUID_R : GHOST_R,
         .dx = DIR_X[dir],
         .dy = DIR_Y[dir],
-        .ends = g.tick + (kind == WORLD_STORM ? STORM_TIME : SQUID_TIME),
+        .ends = g.tick + (kind == WORLD_STORM ? STORM_TIME : kind == WORLD_SQUID ? SQUID_TIME : GHOST_TIME),
     };
     if (kind == WORLD_SQUID) squid_tide();
     // `count` = segundos que dura, `value` = onde (x nos 16 bits de baixo, y nos de cima).
@@ -1265,14 +1340,39 @@ static void start_event(uint8_t kind) {
 
 static void end_event(void) {
     uint8_t kind = g.event.kind;
+    // Acabou o tempo: o navio fantasma some na neblina.
+    if (kind == WORLD_GHOST && g.ghost >= 0) g.predators[g.ghost].alive = 0;
+    g.ghost = -1;
     g.event = (world_event_t){0};
     g.next_event = g.tick + EVENT_GAP + rnd_below(EVENT_GAP);
     event_all(EV_WORLD_END, kind, 0, 0);
 }
 
+// Afundaram o navio fantasma: $300 divididos pelo dano de cada um, e todo
+// mundo que acertou ganha um baú.
+static void ghost_sunk(void) {
+    uint32_t total = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) total += g.ghost_dmg[i];
+    for (int i = 0; i < MAX_PLAYERS && total; i++) {
+        if (!g.ghost_dmg[i] || g.players[i].state != SLOT_PLAYING) continue;
+        uint32_t share = (uint32_t)((uint64_t)GHOST_BOUNTY_CENTS * g.ghost_dmg[i] / total);
+        profile_t *pr = prof(&g.players[i]);
+        pr->money += share;
+        storage_save(g.players[i].profile, pr);
+        send_event(i, EV_PREDATOR_KILL, PRED_GHOST, g.ghost_dmg[i], share);
+        give_random_item(i);
+    }
+    g.ghost = -1; // já afundou: end_event não precisa sumir com ele
+    end_event();
+    send_rank(-1);
+}
+
 static void update_world(void) {
     if (g.event.kind && g.tick >= g.event.ends) end_event();
-    if (!g.event.kind && g.tick >= g.next_event) start_event(rnd_below(2) ? WORLD_STORM : WORLD_SQUID);
+    if (g.event.kind == WORLD_GHOST && !g.predators[g.ghost].alive) ghost_sunk();
+    if (!g.event.kind && g.tick >= g.next_event) start_event((uint8_t)(WORLD_STORM + rnd_below(3)));
+    // O anúncio do navio fantasma acompanha o navio.
+    if (g.event.kind == WORLD_GHOST) g.event.x = g.predators[g.ghost].x, g.event.y = g.predators[g.ghost].y;
     // A tempestade anda com o vento, sem sair do mapa.
     if (g.event.kind == WORLD_STORM && g.tick % STORM_DRIFT_EVERY == 0) {
         int nx = g.event.x + g.event.dx, ny = g.event.y + g.event.dy;
@@ -1578,6 +1678,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     update_schools();
     for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
+    g.ghost = -1;
 }
 
 int game_connect(void) {
