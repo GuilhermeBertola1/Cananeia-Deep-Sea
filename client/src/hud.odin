@@ -48,7 +48,11 @@ draw_map_at :: proc(x, y, size: f32) {
 		rl.DrawRectangleV({x + f32(cx) * k - r, y + f32(cy) * k - r}, {r * 2, r * 2}, color)
 	}
 	for m in s.marks[:s.mark_count] {
-		if m.kind == MARK_SCHOOL do dot(x, y, k, m.x, m.y, max(1, k), COLOR_SCHOOL)
+		switch m.kind {
+		case MARK_SCHOOL: dot(x, y, k, m.x, m.y, max(1, k), COLOR_SCHOOL)
+		case MARK_BAG: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_BAG)
+		case MARK_CROWN: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_ACCENT)
+		}
 	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
 	for b in s.boats[:s.boat_count] {
@@ -264,7 +268,7 @@ draw_shipyard :: proc() {
 draw_inventory :: proc() {
 	world_w := f32(rl.GetScreenWidth() - PANEL_W)
 	w: f32 = 760
-	h: f32 = 100 + BAG_SIZE * 26
+	h: f32 = 100 + BAG_SIZE * 26 + 36 + LOOT_SLOTS * 24
 	x := (world_w - w) / 2
 	y := (f32(rl.GetScreenHeight()) - h) / 2
 	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
@@ -290,6 +294,24 @@ draw_inventory :: proc() {
 		}
 		row_y += 26
 	}
+
+	// Saque que o barco carrega (bags e coroas pegas no mar) e o placar.
+	row_y += 10
+	text("SAQUE", cx, row_y, 20, COLOR_QUIET)
+	score := fmt.tprintf("abates %d  mortes %d", s.kills, s.deaths)
+	text(score, cx + list_w - 20 - text_width(score, 20), row_y, 20, COLOR_QUIET)
+	row_y += 26
+	empty := true
+	for &l in s.loot {
+		switch l.kind {
+		case LOOT_BAG: text(fmt.tprintf("$ Bag de %s (%d peixes)", loot_owner(&l), l.fish), cx, row_y, 20, COLOR_BAG)
+		case LOOT_CROWN: text(fmt.tprintf("W Coroa de %s", loot_owner(&l)), cx, row_y, 20, COLOR_ACCENT)
+		case: continue
+		}
+		empty = false
+		row_y += 24
+	}
+	if empty do text("Nada por enquanto.", cx, row_y, 20, COLOR_QUIET)
 
 	// Detalhes do item escolhido à direita.
 	dx := cx + list_w + 20

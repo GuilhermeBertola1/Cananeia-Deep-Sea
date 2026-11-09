@@ -18,6 +18,8 @@ COLOR_INK :: rl.Color{215, 227, 244, 255}
 COLOR_QUIET :: rl.Color{123, 140, 166, 255}
 COLOR_ACCENT :: rl.Color{255, 209, 102, 255}
 COLOR_SCHOOL :: rl.Color{125, 249, 255, 255}
+COLOR_SHOT :: rl.Color{255, 150, 70, 255}
+COLOR_BAG :: rl.Color{214, 160, 96, 255}
 
 PLAYER_COLORS := [6]rl.Color {
 	{255, 107, 107, 255},
@@ -195,6 +197,17 @@ draw_schools :: proc(v: View) {
 			}
 		}
 	}
+	// Bags ($) e coroas (W) boiando, piscando para chamar atenção.
+	for m in s.marks[:s.mark_count] {
+		if m.kind != MARK_BAG && m.kind != MARK_CROWN do continue
+		sx, sy := in_view(v, m.x, m.y) or_continue
+		bright := u8(180 + 75 * math.sin(rl.GetTime() * 5))
+		if m.kind == MARK_BAG {
+			glyph(sx, sy, '$', {COLOR_BAG.r, COLOR_BAG.g, COLOR_BAG.b, bright})
+		} else {
+			glyph(sx, sy, 'W', {COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, bright})
+		}
+	}
 }
 
 @(private = "file")
@@ -233,6 +246,13 @@ draw_boats :: proc(v: View) {
 		label_y := b.y - 1
 		if sail > 0 do label_y -= 1
 		draw_label(v, b.x, label_y, p.name, rl.WHITE)
+		// Barrinha de vida embaixo do barco, só quando já levou dano.
+		if sx, sy, ok := in_view(v, b.x, b.y); ok && b.hp_pct < 100 {
+			bx, by := f32((sx - 1) * CELL_W), f32((sy + 1) * CELL_H + 2)
+			bw := f32(3 * CELL_W)
+			rl.DrawRectangleV({bx, by}, {bw, 4}, {40, 50, 66, 255})
+			rl.DrawRectangleV({bx, by}, {bw * f32(b.hp_pct) / 100, 4}, {255, 107, 107, 255})
+		}
 	}
 	sx, sy, _ := in_view(v, s.x, s.y)
 	pulse := u8(60 + 40 * math.sin(rl.GetTime() * 4))
@@ -242,6 +262,10 @@ draw_boats :: proc(v: View) {
 
 @(private = "file")
 draw_effects :: proc(v: View) {
+	// Tiros voando.
+	for shot in s.shots[:s.shot_count] {
+		if sx, sy, ok := in_view(v, shot[0], shot[1]); ok do glyph(sx, sy, '*', COLOR_SHOT)
+	}
 	// Rastro do barco: os últimos lugares por onde passou, sumindo aos poucos.
 	for k in 0 ..< len(s.wake) {
 		w := s.wake[(s.wake_next + k) % len(s.wake)] // k = 0 é o mais antigo
