@@ -41,14 +41,19 @@ typedef struct {
     uint16_t damage;
     loot_t loot[LOOT_SLOTS];
     uint16_t kills, deaths;
+    uint8_t enchant[BAG_SIZE]; // nível do encanto da sereia de cada item da bolsa (0 a 3)
+    uint8_t has_mission;       // a sereia pediu a coroa de alguém
+    uint8_t mission_target;    // índice do perfil do alvo
 } profile_t;
 
 #define PROFILE_V03_SIZE 200
 #define PROFILE_V04_SIZE 204
+#define PROFILE_V05_SIZE 288
 
 static inline void profile_upgrade(profile_t *p, size_t old_size) {
     size_t keep = old_size == PROFILE_V03_SIZE   ? offsetof(profile_t, boat)
                   : old_size == PROFILE_V04_SIZE ? offsetof(profile_t, loot)
+                  : old_size == PROFILE_V05_SIZE ? offsetof(profile_t, enchant)
                                                  : old_size;
     memset((uint8_t *)p + keep, 0, sizeof(profile_t) - keep);
 }

@@ -427,6 +427,7 @@ static int bag_add(profile_t *pr, item_t item) {
     for (int i = 0; i < BAG_SIZE; i++) {
         if (pr->bag[i].base == ITEM_NONE) {
             pr->bag[i] = item;
+            pr->enchant[i] = 0;
             return i;
         }
     }
@@ -473,6 +474,7 @@ static void discard(int slot, uint8_t index) {
     uint8_t current = equipped_slot(pr, index);
     if (current) pr->equipped[current - 1] = 0;
     pr->bag[index] = (item_t){0};
+    pr->enchant[index] = 0; // o encanto vai junto com o item
     update_stats(p);
     send_inventory(slot);
 }
