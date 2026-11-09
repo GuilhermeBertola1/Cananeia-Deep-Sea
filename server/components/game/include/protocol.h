@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 5
+#define PROTOCOL_VERSION 6
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -51,7 +51,7 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_COMBINED = 31, EV_CANT_COMBINE = 32 };
 enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4 };
 enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
-enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2 };
+enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.
 typedef struct {

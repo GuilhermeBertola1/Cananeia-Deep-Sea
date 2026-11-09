@@ -11,7 +11,7 @@ MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 102 // cardumes (70) + bags e coroas (32)
+MAX_MARKS :: 103 // cardumes (70) + bags e coroas (32) + a sereia
 LOOT_SLOTS :: 4
 LOG_SIZE :: 6
 
@@ -111,9 +111,13 @@ State :: struct {
 	hp, hp_max:    int,
 	broken:        bool,
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
+	at_mermaid:    bool, // perto da pedra da sereia
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
 	loot:          [LOOT_SLOTS]Loot,
+	has_mission:   bool,
+	mission_buf:   [NAME_MAX_LEN]u8, // nome do alvo da missão da sereia
+	mission_len:   int,
 	boat_level:    [PART_COUNT]int,
 	hold:          [FISH_COUNT]int,
 	bag:           [BAG_SIZE]Item,
@@ -416,6 +420,11 @@ money_text :: proc(cents: u32) -> string {
 	return fmt.tprintf("$%d,%02d", cents / 100, cents % 100)
 }
 
+// Nome de quem a sereia mandou afundar.
+mission_target :: proc() -> string {
+	return string(s.mission_buf[:s.mission_len])
+}
+
 player_name :: proc(id: int) -> string {
 	return s.players[id].name if id >= 0 && id < MAX_PLAYERS else "Alguém"
 }
@@ -588,7 +597,7 @@ on_net_message :: proc(data: []u8) {
 		n := int(read_u8(&r))
 		bag: [BAG_SIZE]Item
 		for i in 0 ..< n {
-			it := Item{base = read_u8(&r), rarity = read_u8(&r), equipped = read_u8(&r)}
+			it := Item{base = read_u8(&r), rarity = read_u8(&r), equipped = read_u8(&r), enchant = read_u8(&r)}
 			for &a in it.affix do a = read_u8(&r)
 			for &v in it.stats do v = int(read_i16(&r))
 			if i < BAG_SIZE do bag[i] = it
@@ -604,10 +613,14 @@ on_net_message :: proc(data: []u8) {
 			owner := read_name(&r, name_buf[:])
 			if i < LOOT_SLOTS do loot[i] = Loot{kind = kind, fish = fish, owner_buf = name_buf, owner_len = len(owner)}
 		}
+		has_mission := read_u8(&r) != 0
+		mission_buf: [NAME_MAX_LEN]u8
+		mission := read_name(&r, mission_buf[:])
 		if !r.ok do return
 		s.bag, s.stats = bag, stats
 		s.kills, s.deaths = kills, deaths
 		s.loot = loot
+		s.has_mission, s.mission_buf, s.mission_len = has_mission, mission_buf, len(mission)
 
 	case S_BOAT:
 		levels: [PART_COUNT]int
@@ -633,6 +646,7 @@ read_state :: proc(r: ^Reader) {
 	s.at_dock = flags & STATE_AT_DOCK != 0
 	s.broken = flags & STATE_BROKEN != 0
 	s.safe = flags & STATE_SAFE != 0
+	s.at_mermaid = flags & STATE_AT_MERMAID != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))

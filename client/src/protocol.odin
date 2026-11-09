@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 5
+PROTOCOL_VERSION :: 6
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -17,6 +17,9 @@ C_DISCARD :: 0x05
 C_UPGRADE :: 0x06
 C_REPAIR :: 0x07
 C_FIRE :: 0x08
+C_MERC :: 0x09
+C_MERMAID :: 0x0A
+C_COMBINE :: 0x0B
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -56,13 +59,31 @@ EV_KILL :: 16
 EV_DIED :: 17
 EV_LOOT :: 18
 EV_LOOT_FULL :: 19
+EV_MERC :: 20
+EV_MERC_NOTHING :: 21
+EV_SPIN_WAIT :: 22
+EV_SPIN_STEAL :: 23
+EV_SPIN_MISSION :: 24
+EV_HUNTED :: 25
+EV_SPIN_NOTHING :: 26
+EV_MISSION_WAIT :: 27
+EV_ENCHANT :: 28
+EV_NOTHING_TO_ENCHANT :: 29
+EV_MISSION_GIVE_UP :: 30
+EV_COMBINED :: 31
+EV_CANT_COMBINE :: 32
 
 MARK_SCHOOL :: 1
 MARK_BAG :: 2
 MARK_CROWN :: 3
+MARK_MERMAID :: 4
 STATE_AT_DOCK :: 1 << 0
 STATE_BROKEN :: 1 << 1
 STATE_SAFE :: 1 << 2
+STATE_AT_MERMAID :: 1 << 3
+
+MERMAID_TALK :: 0
+MERMAID_GIVE_UP :: 1
 
 LOOT_NONE :: 0
 LOOT_BAG :: 1
@@ -152,5 +173,21 @@ send_repair :: proc() {
 send_fire :: proc(x, y: i32) {
 	if x < 0 || y < 0 do return
 	buf := [5]u8{C_FIRE, u8(x), u8(x >> 8), u8(y), u8(y >> 8)}
+	net_send(buf[:])
+}
+
+send_merc :: proc() {
+	buf := [1]u8{C_MERC}
+	net_send(buf[:])
+}
+
+// Fala com a sereia: MERMAID_TALK gira a roleta ou entrega a coroa; MERMAID_GIVE_UP desiste da missão.
+send_mermaid :: proc(action: u8) {
+	buf := [2]u8{C_MERMAID, action}
+	net_send(buf[:])
+}
+
+send_combine :: proc(a, b: u8) {
+	buf := [3]u8{C_COMBINE, a, b}
 	net_send(buf[:])
 }

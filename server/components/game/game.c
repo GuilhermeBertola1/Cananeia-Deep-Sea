@@ -300,6 +300,7 @@ static void send_inventory(int slot) {
         put_u8(&w, info.base);
         put_u8(&w, info.rarity);
         put_u8(&w, equipped_slot(pr, i));
+        put_u8(&w, pr->enchant[i]);
         for (int a = 0; a < MAX_AFFIXES; a++) put_u8(&w, info.affix[a]);
         for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, info.stats[s]);
     }
@@ -315,6 +316,8 @@ static void send_inventory(int slot) {
         put_u16(&w, fish);
         put_name(&w, l->kind ? g.profiles[l->owner].name : "");
     }
+    put_u8(&w, pr->has_mission);
+    put_name(&w, pr->has_mission ? g.profiles[pr->mission_target].name : "");
     send_w(slot, &w);
 }
 
@@ -379,7 +382,7 @@ static void send_state(int slot) {
     put_u8(&w, p->speed);
     put_u8(&w, p->vel);
     put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
-                   (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0));
+                   (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
     put_u8(&w, p->reload);

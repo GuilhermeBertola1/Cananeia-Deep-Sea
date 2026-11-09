@@ -29,6 +29,9 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x06` | `C_UPGRADE` | `u8` peça (0 vela, 1 casco, 2 leme). Compra o próximo nível no estaleiro. Só no cais |
 | `0x07` | `C_REPAIR` | Conserta o barco inteiro no estaleiro. Só no cais |
 | `0x08` | `C_FIRE` | `u16` x, `u16` y: célula do mundo para onde atirar. Precisa de arma equipada, recarga zerada e estar fora da zona segura |
+| `0x09` | `C_MERC` | Entrega o saque ao mercenário: os peixes das bags vão para o porão e as coroas viram recompensa. Só no cais |
+| `0x0A` | `C_MERMAID` | `u8` ação: 0 fala (gira a roleta ou entrega a coroa da missão), 1 desiste da missão. Só perto da sereia |
+| `0x0B` | `C_COMBINE` | `u8` índice a, `u8` índice b na bolsa: o mecânico junta os dois itens (mesmo tipo) num só, no lugar de `a`. Só no cais |
 
 ## Servidor → cliente
 
@@ -55,7 +58,7 @@ u16 capacidade do porão
 u8  velocidade máxima (células/s)
 u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
 u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
-                        bit 2 = zona segura
+                        bit 2 = zona segura, bit 3 = perto da sereia
 u16 vida, u16 vida máxima
 u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
@@ -89,21 +92,37 @@ u8  n, n × (u16 x, u16 y)                        tiros voando a até 50 célula
 | 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu), `quantidade` = peixes que ficaram na bag |
 | 18 | pegou um saque: `espécie` = tipo (1 bag, 2 coroa), `quantidade` = 1 se era seu |
 | 19 | achou um saque, mas o barco já carrega 4 |
+| 20 | mercenário: `quantidade` = peixes que foram para o porão, `valor` = recompensa pelas coroas, `espécie` = 1 se sobrou peixe na bag (porão cheio) |
+| 21 | mercenário: nada para entregar (`espécie` = 1 se é porque o porão está cheio) |
+| 22 | a roleta ainda não girou de novo: `valor` = segundos que faltam |
+| 23 | roleta: a sereia roubou `valor` centavos |
+| 24 | roleta: missão nova (o nome do alvo vem no `S_INVENTORY`) |
+| 25 | a sereia mandou alguém atrás de você: `espécie` = id do caçador |
+| 26 | roleta: ela só cantou |
+| 27 | missão: você ainda não tem a coroa do alvo |
+| 28 | encanto: `espécie` = tipo do item, `quantidade` = nível novo, `valor` = índice na bolsa |
+| 29 | missão: nenhum item na bolsa pode ser encantado (bolsa vazia ou tudo no nível 3) |
+| 30 | desistiu da missão |
+| 31 | mecânico: `espécie` = tipo do item novo, `quantidade` = raridade, `valor` = preço |
+| 32 | mecânico: os dois itens precisam ser do mesmo tipo |
 
 ### `S_INVENTORY`
 
 ```
 u8  n                   tamanho da bolsa (12)
-n × item (16 bytes):
+n × item (17 bytes):
     u8  tipo            0 = slot vazio
     u8  raridade        0 comum, 1 raro, 2 épico, 3 lendário
     u8  equipado        0 = não; 1 arma, 2 ferramenta, 3 a 5 boosts
+    u8  encanto         0 a 3 (já somado nos stats)
     u8  afixos[3]       0xFF = sem afixo
     i16 stats[5]        velocidade, vida, dano, produção, sorte
 i16 stats[5]            total do barco (base + equipados)
 u16 abates, u16 mortes
 u8  n                   saques que o barco carrega (4)
 n × (u8 tipo, u16 peixes, nome do dono)          tipo 0 = vazio, 1 bag, 2 coroa
+u8  missão              1 = a sereia pediu uma coroa
+nome do alvo            vazio sem missão
 ```
 
 O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixos e números saem da semente (`server/components/game/items.c`). O servidor manda o item já pronto, então o cliente não roda o gerador.
@@ -164,7 +183,14 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 - O tiro acerta um barco na mesma linha, a até 1 célula para o lado. Some ao acertar, ao bater na terra ou no fim do alcance.
 - **Zona segura**: a até 21 células do centro do porto ninguém atira e tiro não tira vida.
 - **Vida 0 por tiro = morte** (bater na costa continua sendo só avaria; um barco avariado afunda com qualquer tiro). Quem morre deixa no mar uma **bag** com os peixes do porão e uma **coroa**, perde o saque que carregava e renasce perto do porto com o barco inteiro.
-- Passar por cima de uma bag ou coroa pega o saque. A sua volta para você (os peixes voltam ao porão); a dos outros fica no barco, até 4. Na v0.6 o mercenário e a sereia dão uso para elas. Saque no mar some em 5 minutos.
+- Passar por cima de uma bag ou coroa pega o saque. A sua volta para você (os peixes voltam ao porão); a dos outros fica no barco, até 4. Saque no mar some em 5 minutos.
+
+### NPCs: mercenário, sereia e mecânico
+
+- **Mercenário** (no cais): fica com as bags dos outros e passa os peixes delas para o seu porão, até encher (o resto fica na bag). Paga $25 por coroa, menos pela coroa do alvo da sua missão.
+- **Sereia** (numa pedra em mar aberto, 70 a 110 células do porto, sempre no mesmo lugar para a mesma semente; zona segura de 8 células em volta). Sem missão, a roleta gira uma vez por minuto: 40% ela rouba 10% do seu dinheiro (no máximo $100), 45% dá a missão "derrote o jogador X" (alguém online, se tiver), 15% só canta. Com a missão, entregar a coroa do alvo encanta um item aleatório da bolsa.
+- **Encanto**: até o nível 3, cada nível soma 25% (no mínimo +1) em cada stat positivo do item. Fica no perfil, ao lado do item, e some se o item for jogado fora.
+- **Mecânico** (no cais): junta dois itens do mesmo tipo num só, sorteado de novo pelo gerador. Sai no mínimo com a raridade do melhor dos dois; com raridades iguais, uma acima. O encanto maior fica. Nunca sai comum (dois comuns dão um raro). Preço pela raridade que sai: $80 (raro), $250 (épico), $600 (lendário).
 
 ### Marcas do minimapa (`S_MARKS`)
 
@@ -173,8 +199,9 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 | 1 cardume | espécie |
 | 2 bag | 0 |
 | 3 coroa | 0 |
+| 4 sereia | 0 |
 
-Bosses, NPCs e missões entram aqui como tipos novos.
+Bosses e outros NPCs entram aqui como tipos novos.
 
 ## Senhas
 

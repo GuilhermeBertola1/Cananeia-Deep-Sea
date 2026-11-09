@@ -9,12 +9,14 @@ BAG_SIZE :: 12
 STAT_COUNT :: 5
 MAX_AFFIXES :: 3
 AFFIX_NONE :: 0xFF
+ENCHANT_MAX :: 3
 ITEM_NONE :: 0
 
 Item :: struct {
 	base:     u8, // ITEM_NONE = slot vazio
 	rarity:   u8,
 	equipped: u8, // 0 = não; 1 arma, 2 ferramenta, 3 a 5 boosts
+	enchant:  u8, // nível do encanto da sereia (0 a 3), já somado nos stats
 	affix:    [MAX_AFFIXES]u8,
 	stats:    [STAT_COUNT]int,
 }
