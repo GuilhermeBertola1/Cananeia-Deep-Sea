@@ -257,6 +257,11 @@ static uint8_t equipped_slot(const profile_t *pr, int bag_index) {
     return 0;
 }
 
+// Item da bolsa já com o encanto da sereia.
+static item_info_t bag_info(const profile_t *pr, int index) {
+    return item_info_enchanted(pr->bag[index], pr->enchant[index]);
+}
+
 // O servidor manda o item já "aberto" (raridade, afixos, números), então o
 // cliente não precisa rodar o gerador.
 static void send_inventory(int slot) {
@@ -266,7 +271,7 @@ static void send_inventory(int slot) {
     put_u8(&w, S_INVENTORY);
     put_u8(&w, BAG_SIZE);
     for (int i = 0; i < BAG_SIZE; i++) {
-        item_info_t info = item_info(pr->bag[i]);
+        item_info_t info = bag_info(pr, i);
         put_u8(&w, info.base);
         put_u8(&w, info.rarity);
         put_u8(&w, equipped_slot(pr, i));
@@ -414,7 +419,7 @@ static void update_stats(player_t *p) {
     p->capacity = HULL_CAPACITY[level(pr, PART_HULL)];
     for (int e = 0; e < EQUIP_SLOTS; e++) {
         if (!pr->equipped[e]) continue;
-        item_info_t info = item_info(pr->bag[pr->equipped[e] - 1]);
+        item_info_t info = bag_info(pr, pr->equipped[e] - 1);
         for (int s = 0; s < STAT_COUNT; s++) p->stats[s] += info.stats[s];
     }
     int speed = p->stats[STAT_SPEED];

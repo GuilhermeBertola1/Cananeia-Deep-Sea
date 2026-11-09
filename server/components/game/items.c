@@ -77,3 +77,15 @@ item_info_t item_info(item_t item) {
     }
     return info;
 }
+
+item_info_t item_info_enchanted(item_t item, uint8_t level) {
+    item_info_t info = item_info(item);
+    if (level > ENCHANT_MAX) level = ENCHANT_MAX;
+    for (int s = 0; level && s < STAT_COUNT; s++) {
+        int v = info.stats[s];
+        if (v <= 0) continue; // stat negativo ou zero não cresce
+        int bonus = (v * ENCHANT_PCT * level + 50) / 100;
+        info.stats[s] = (int16_t)(v + (bonus > level ? bonus : level));
+    }
+    return info;
+}
