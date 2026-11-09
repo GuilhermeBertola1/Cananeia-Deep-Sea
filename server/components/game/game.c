@@ -21,6 +21,8 @@
 #define SAVE_EVERY (30 * TICK_HZ)
 #define RANK_SIZE 10
 #define MAX_SHOTS 32
+#define MAX_DROPS 32
+#define DROP_LIFE (5 * 60 * TICK_HZ) // bag e coroa somem do mar em 5 minutos
 // Posição do tiro em 1/256 de célula, para andar em qualquer ângulo só com inteiros.
 #define SUB 256
 
@@ -65,6 +67,14 @@ typedef struct {
     uint16_t damage;
 } shot_t;
 
+// Bag ou coroa boiando no mar, esperando alguém passar por cima.
+typedef struct {
+    uint8_t alive;
+    uint16_t x, y;
+    uint32_t expires;
+    loot_t loot;
+} drop_t;
+
 // Ilhas com NPC: perto delas ninguém toma tiro. Por enquanto só o porto.
 typedef struct {
     int16_t x, y, r;
@@ -82,6 +92,7 @@ static struct {
     player_t players[MAX_PLAYERS];
     school_t schools[MAX_SCHOOLS];
     shot_t shots[MAX_SHOTS];
+    drop_t drops[MAX_DROPS];
     profile_t profiles[MAX_PROFILES];
     uint32_t pressure[FISH_COUNT];
 } g;
@@ -224,6 +235,15 @@ static void send_marks(int slot) {
         put_u16(&w, s->y);
         put_u8(&w, MARK_SCHOOL);
         put_u8(&w, s->species);
+        n++;
+    }
+    for (int i = 0; i < MAX_DROPS; i++) {
+        const drop_t *d = &g.drops[i];
+        if (!d->alive) continue;
+        put_u16(&w, d->x);
+        put_u16(&w, d->y);
+        put_u8(&w, d->loot.kind == LOOT_BAG ? MARK_BAG : MARK_CROWN);
+        put_u8(&w, 0);
         n++;
     }
     out[count_at] = n;
@@ -596,15 +616,107 @@ static void fire(int slot, int tx, int ty) {
     }
 }
 
+// Joga um saque no mar, numa célula de água perto de (x, y). Com o mar
+// cheio de saques, o mais velho dá lugar ao novo.
+static void drop_loot(int x, int y, const loot_t *loot) {
+    int pick = 0;
+    for (int i = 0; i < MAX_DROPS; i++) {
+        if (!g.drops[i].alive) { pick = i; break; }
+        if (g.drops[i].expires < g.drops[pick].expires) pick = i;
+    }
+    for (int tries = 0; tries < 20; tries++) {
+        int nx = x + (tries ? (int)rnd_below(5) - 2 : 0), ny = y + (tries ? (int)rnd_below(5) - 2 : 0);
+        if (!tile_is_water(tile(nx, ny))) continue;
+        x = nx, y = ny;
+        break;
+    }
+    g.drops[pick] = (drop_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .expires = g.tick + DROP_LIFE, .loot = *loot};
+}
+
+// Morte por tiro: o porão vira uma bag, cai a coroa, cai o saque que o barco
+// carregava e o jogador renasce no porto com o barco inteiro.
+static void die(int slot, int killer) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    loot_t bag = {.kind = LOOT_BAG, .owner = (uint8_t)p->profile};
+    int fish = 0;
+    for (int i = 0; i < FISH_COUNT; i++) fish += bag.fish[i] = pr->hold[i];
+    memset(pr->hold, 0, sizeof pr->hold);
+    if (fish) drop_loot(p->x, p->y, &bag);
+    drop_loot(p->x, p->y, &(loot_t){.kind = LOOT_CROWN, .owner = (uint8_t)p->profile});
+    for (int i = 0; i < LOOT_SLOTS; i++) {
+        if (pr->loot[i].kind != LOOT_NONE) drop_loot(p->x, p->y, &pr->loot[i]);
+        pr->loot[i] = (loot_t){0};
+    }
+
+    pr->deaths++;
+    pr->damage = 0;
+    p->vel = 0;
+    p->move_budget = 0;
+    find_spawn(p);
+    update_stats(p);
+    storage_save(p->profile, pr);
+    send_event(slot, EV_DIED, (uint8_t)killer, (uint16_t)fish, 0);
+    send_inventory(slot);
+
+    if (killer >= 0 && g.players[killer].state == SLOT_PLAYING) {
+        prof(&g.players[killer])->kills++;
+        send_event(killer, EV_KILL, (uint8_t)slot, 0, 0);
+    }
+    send_marks(-1);
+}
+
 static void hit(int target, shot_t *sh) {
     player_t *t = &g.players[target];
     profile_t *pr = prof(t);
     int dmg = sh->damage;
+    int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pr->damage = (uint16_t)(pr->damage + dmg > hp_max(t) ? hp_max(t) : pr->damage + dmg);
-    update_stats(t);
     send_event(target, EV_HURT, sh->owner, (uint16_t)dmg, (uint32_t)hp(t));
-    if (g.players[sh->owner].state == SLOT_PLAYING) send_event(sh->owner, EV_HIT, (uint8_t)target, (uint16_t)dmg, (uint32_t)hp(t));
-    if (hp(t) == 0) send_event(target, EV_BROKEN, FISH_NONE, 0, 0);
+    if (shooter >= 0) send_event(shooter, EV_HIT, (uint8_t)target, (uint16_t)dmg, (uint32_t)hp(t));
+    // Vida 0 por tiro é morte (na costa continua sendo só avaria).
+    if (hp(t) == 0) die(target, shooter);
+}
+
+// Passou por cima de uma bag ou coroa. A sua volta para você (os peixes
+// voltam ao porão); a dos outros fica guardada no barco.
+static void pick_up(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    for (int i = 0; i < MAX_DROPS; i++) {
+        drop_t *d = &g.drops[i];
+        if (!d->alive || d->x < p->x - 1 || d->x > p->x + 1 || d->y < p->y - 1 || d->y > p->y + 1) continue;
+        if (d->loot.owner == p->profile) {
+            int fish = 0;
+            for (int f = 0; f < FISH_COUNT; f++) fish += d->loot.fish[f];
+            if (fish > p->capacity - hold_count(p)) {
+                if (g.tick % 50 == 0) send_event(slot, EV_HOLD_FULL, FISH_NONE, 0, 0);
+                continue;
+            }
+            for (int f = 0; f < FISH_COUNT; f++) pr->hold[f] += d->loot.fish[f];
+        } else {
+            int free_slot = -1;
+            for (int l = 0; l < LOOT_SLOTS && free_slot < 0; l++)
+                if (pr->loot[l].kind == LOOT_NONE) free_slot = l;
+            if (free_slot < 0) {
+                if (g.tick % 50 == 0) send_event(slot, EV_LOOT_FULL, FISH_NONE, 0, 0);
+                continue;
+            }
+            pr->loot[free_slot] = d->loot;
+        }
+        d->alive = 0;
+        send_event(slot, EV_LOOT, d->loot.kind, d->loot.owner == p->profile, 0); // count 1 = era seu
+        send_inventory(slot);
+        send_marks(-1);
+    }
+}
+
+static void update_drops(void) {
+    int changed = 0;
+    for (int i = 0; i < MAX_DROPS; i++) {
+        if (g.drops[i].alive && g.drops[i].expires <= g.tick) g.drops[i].alive = 0, changed = 1;
+    }
+    if (changed) send_marks(-1);
 }
 
 // O tiro anda uma célula por vez (até `speed` por tick), para não pular
@@ -656,6 +768,7 @@ static void update_player(int slot) {
     if (p->vel == 0) p->move_budget = 0;
     prof(p)->x = p->x;
     prof(p)->y = p->y;
+    pick_up(slot);
 
     // Produção = % a mais na chance de pescar. +50 de produção: 6% vira 9%.
     int production = p->stats[STAT_PRODUCTION] > -100 ? p->stats[STAT_PRODUCTION] : -100;
@@ -900,6 +1013,7 @@ void game_tick(void) {
         if (g.players[i].state == SLOT_PLAYING) update_player(i);
     
     update_shots();
+    update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) send_state(i);
 
