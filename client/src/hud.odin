@@ -148,13 +148,13 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
-	text("B mercenário  E sereia (S, no mar)", x, sh - 46, 10, COLOR_QUIET)
+	text("B mercenário  C mecânico  E sereia (S, no mar)", x, sh - 46, 10, COLOR_QUIET)
 	text("Clique ou Espaço atira na mira (+)", x, sh - 32, 10, COLOR_QUIET)
 	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
 	tip := ""
-	if s.at_dock do tip = "No cais. E: lojista (L)   U: estaleiro (E)   B: mercenário (M)"
+	if s.at_dock do tip = "No cais. E: lojista (L)  U: estaleiro (E)  B: mercenário (M)  C: mecânico (C)"
 	if s.at_mermaid do tip = "A sereia (S) está ouvindo. E: falar com ela"
 	if tip != "" && !menu_open() {
 		w := text_width(tip, 20)
@@ -369,6 +369,57 @@ draw_mermaid :: proc() {
 		text("[X] Desistir da missão", cx, cy, 20, COLOR_QUIET)
 	}
 	text("E ou Esc fecha.", cx, y + h - 30, 20, COLOR_QUIET)
+}
+
+// --- mecânico ------------------------------------------------------------------
+
+draw_mechanic :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 640
+	h: f32 = 170 + BAG_SIZE * 26
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	cy := y + 16
+	text("MECÂNICO", cx, cy, 20, COLOR_ACCENT)
+	cy += 26
+	text("\"Dois iguais viram um melhor. Pode confiar.\"", cx, cy, 20, COLOR_QUIET)
+	cy += 36
+
+	// A bolsa. > = o primeiro item escolhido.
+	for it, i in s.bag {
+		if i == s.mech_cursor do rl.DrawRectangleV({cx - 8, cy - 3}, {w - 24, 26}, {255, 255, 255, 28})
+		if it.base == ITEM_NONE {
+			text(fmt.tprintf("%2d   -", i + 1), cx, cy, 20, COLOR_QUIET)
+		} else {
+			mark := ">" if s.mech_first == i + 1 else " "
+			ench := fmt.tprintf(" +%d", it.enchant) if it.enchant > 0 else ""
+			text(fmt.tprintf("%2d %s %s%s (%s)", i + 1, mark, item_name(it.base), ench, rarity_name(it.rarity)), cx, cy, 20, rarity_color(it.rarity))
+		}
+		cy += 26
+	}
+
+	// O que sai se juntar o marcado com o que está no cursor.
+	cy += 8
+	if s.mech_first == 0 {
+		text("Enter marca o primeiro item.", cx, cy, 20, COLOR_INK)
+	} else {
+		a, b := s.bag[s.mech_first - 1], s.bag[s.mech_cursor]
+		if s.mech_first == s.mech_cursor + 1 || b.base == ITEM_NONE {
+			text(fmt.tprintf("Escolha outro %s para juntar.", item_name(a.base)), cx, cy, 20, COLOR_INK)
+		} else if a.base != b.base {
+			text("Os dois precisam ser do mesmo tipo.", cx, cy, 20, {255, 140, 120, 255})
+		} else {
+			r := combine_rarity(a, b)
+			price := COMBINE_PRICE[r]
+			color := COLOR_ACCENT if s.money >= price else COLOR_QUIET
+			text(fmt.tprintf("[Enter] Juntar: sai %s ou melhor, por %s", rarity_name(r), money_text(price)), cx, cy, 20, color)
+		}
+	}
+	text("W/S escolhe  Enter marca/junta  C ou Esc fecha", cx, y + h - 30, 20, COLOR_QUIET)
 }
 
 // --- inventário -----------------------------------------------------------------

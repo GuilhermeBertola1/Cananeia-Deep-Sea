@@ -177,7 +177,8 @@ draw_terrain :: proc(v: View, layer: Layer) {
 		}
 	}
 	if layer == .Islands {
-		// NPCs do porto: mercenário, lojista e estaleiro.
+		// NPCs do porto: mecânico (atrás), mercenário, lojista e estaleiro.
+		if sx, sy, ok := in_view(v, DOCK_X, DOCK_Y - 2); ok do glyph(sx, sy, 'C', COLOR_ACCENT)
 		if sx, sy, ok := in_view(v, DOCK_X - 2, DOCK_Y - 1); ok do glyph(sx, sy, 'M', COLOR_ACCENT)
 		if sx, sy, ok := in_view(v, DOCK_X, DOCK_Y - 1); ok do glyph(sx, sy, 'L', COLOR_ACCENT)
 		if sx, sy, ok := in_view(v, DOCK_X + 2, DOCK_Y - 1); ok do glyph(sx, sy, 'E', COLOR_ACCENT)

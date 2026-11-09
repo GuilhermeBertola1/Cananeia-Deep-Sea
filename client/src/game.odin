@@ -150,6 +150,9 @@ State :: struct {
 	inv_open:      bool,
 	merc_open:     bool,
 	mermaid_open:  bool,
+	mech_open:     bool,
+	mech_cursor:   int,
+	mech_first:    int, // item marcado no mecânico: índice + 1 (0 = nenhum)
 	inv_cursor:    int,
 	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
 	big_map:       bool,
@@ -204,6 +207,7 @@ update :: proc() {
 		if s.yard_open do draw_shipyard()
 		if s.merc_open do draw_mercenary()
 		if s.mermaid_open do draw_mermaid()
+		if s.mech_open do draw_mechanic()
 		if s.inv_open do draw_inventory()
 		if s.big_map do draw_big_map()
 	}
@@ -267,7 +271,7 @@ start_offline :: proc() {
 
 // Alguma janela aberta (NPC ou inventário): o barco não anda nem atira.
 menu_open :: proc() -> bool {
-	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open
+	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open || s.mech_open
 }
 
 // Fecha as janelas dos NPCs. O inventário fica como está.
@@ -277,6 +281,7 @@ close_npcs :: proc() {
 	s.yard_open = false
 	s.merc_open = false
 	s.mermaid_open = false
+	s.mech_open = false
 }
 
 @(private = "file")
@@ -353,6 +358,17 @@ update_playing :: proc() {
 			add_log("O mercenário (M) fica no cais (H) do porto.")
 		}
 	}
+	if rl.IsKeyPressed(.C) && !s.inv_open {
+		if s.mech_open {
+			s.mech_open = false
+		} else if s.at_dock {
+			close_npcs()
+			s.mech_open = true
+			s.mech_first = 0
+		} else {
+			add_log("O mecânico (C) fica no porto, atrás do lojista.")
+		}
+	}
 	if rl.IsKeyPressed(.ESCAPE) {
 		close_npcs()
 		s.big_map = false
@@ -371,6 +387,7 @@ update_playing :: proc() {
 		if rl.IsKeyPressed(.R) do send_repair()
 	}
 	if s.merc_open && rl.IsKeyPressed(.T) do send_merc()
+	if s.mech_open do update_mechanic()
 	if s.mermaid_open {
 		if rl.IsKeyPressed(.G) do send_mermaid(MERMAID_TALK)
 		if rl.IsKeyPressed(.X) && s.has_mission do send_mermaid(MERMAID_GIVE_UP)
@@ -379,8 +396,34 @@ update_playing :: proc() {
 		s.shop_open = false
 		s.yard_open = false
 		s.merc_open = false
+		s.mech_open = false
 	}
 	if !s.at_mermaid do s.mermaid_open = false
+}
+
+// Mecânico: W/S escolhem, Enter marca o primeiro item e Enter no segundo
+// manda juntar. Enter de novo no marcado desmarca.
+@(private = "file")
+update_mechanic :: proc() {
+	step := 0
+	if rl.IsKeyPressed(.W) || rl.IsKeyPressed(.UP) || rl.IsKeyPressedRepeat(.W) || rl.IsKeyPressedRepeat(.UP) do step = -1
+	if rl.IsKeyPressed(.S) || rl.IsKeyPressed(.DOWN) || rl.IsKeyPressedRepeat(.S) || rl.IsKeyPressedRepeat(.DOWN) do step = 1
+	if step != 0 do s.mech_cursor = (s.mech_cursor + step + BAG_SIZE) % BAG_SIZE
+	if !rl.IsKeyPressed(.ENTER) || s.bag[s.mech_cursor].base == ITEM_NONE do return
+	if s.mech_first == 0 {
+		s.mech_first = s.mech_cursor + 1
+		return
+	}
+	if s.mech_first == s.mech_cursor + 1 {
+		s.mech_first = 0
+		return
+	}
+	if s.bag[s.mech_first - 1].base != s.bag[s.mech_cursor].base {
+		add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
+		return
+	}
+	send_combine(u8(s.mech_first - 1), u8(s.mech_cursor))
+	s.mech_first = 0
 }
 
 // Inventário aberto: W/S escolhem o item, Enter equipa, X duas vezes joga fora.
@@ -576,7 +619,8 @@ on_net_message :: proc(data: []u8) {
 		case EV_REPAIRED:
 			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
 		case EV_NO_MONEY:
-			add_log("Estaleiro: \"Isso custa %s, marujo. Volte com o dinheiro.\"", money_text(value))
+			who := "Mecânico" if s.mech_open else "Estaleiro"
+			add_log("%s: \"Isso custa %s, marujo. Volte com o dinheiro.\"", who, money_text(value))
 		case EV_HIT:
 			// Nos tiros, `species` é o id do outro jogador.
 			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
@@ -637,6 +681,12 @@ on_net_message :: proc(data: []u8) {
 			add_log("Sereia: \"Não tenho o que encantar. Traga um item na bolsa.\"")
 		case EV_MISSION_GIVE_UP:
 			add_log("Você desistiu da missão da sereia.")
+		case EV_COMBINED:
+			// No mecânico, `species` é o tipo do item novo e `count` a raridade.
+			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
+			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
+		case EV_CANT_COMBINE:
+			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
 		}
 
 
