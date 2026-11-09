@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0 (2026-11-09): armas, PvP, morte e drops
+
+- Tiro com a arma equipada: mire com o mouse e clique (ou Espaço); segurando, atira de novo quando a recarga acaba. O servidor cria o tiro e decide quem acertou
+- Arpão (alcance 8, recarga 0,6 s), mosquete (14, 1,2 s) e canhão leve (18, 2 s); o dano é o do item, então a raridade e o afixo Afiado contam (`server/components/game/weapon.c`)
+- O tiro voa célula por célula e dá para desviar; some ao acertar, na terra ou no fim do alcance
+- Zona segura a até 21 células do porto: ninguém atira e tiro não tira vida
+- Vida 0 por tiro = morte (bater na costa continua sendo só avaria). Cai uma **bag** com os peixes do porão e uma **coroa**, e o capitão renasce no porto com o barco inteiro
+- Passar por cima pega o saque: a sua bag devolve os peixes; a bag e a coroa dos outros ficam no barco (até 4) para a v0.6. Saque no mar some em 5 minutos
+- Tela: tiros `*`, bags `$` e coroas `W` no mar e no minimapa, mira `+` vermelha no alcance, barrinha de vida nos outros barcos, arma e recarga no painel, saque e abates/mortes no inventário
+- Protocolo versão 5: `C_FIRE`, recarga, zona segura, vida dos outros barcos e tiros no `S_STATE`, saque e placar no `S_INVENTORY`, bags e coroas no `S_MARKS`
+- Perfis da v0.4 são convertidos sem perder nada (saque e abates/mortes no fim do `profile_t`)
+
 ## v0.4.0 (2026-11-08): upgrades do barco
 
 - Estaleiro no cais (NPC `E`, tecla U): vela, casco e leme com 5 níveis cada, de $150 a $2500

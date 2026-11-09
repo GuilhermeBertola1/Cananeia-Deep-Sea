@@ -5,14 +5,14 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 ## Como fazer cada nova versão
 
 1. Atualize o código: `git checkout main && git pull`.
-2. Crie um branch para a versão: `git checkout -b v0.5-pvp`.
+2. Crie um branch para a versão: `git checkout -b v0.6-npcs`.
 3. Um commit por passo, no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português: `tipo(escopo): descrição`. Exemplos: `feat(pesca): rede pega dois peixes por vez`, `fix(rede): ignorar mensagem curta`. Tipos: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`, `perf`. Escopos comuns: `cliente`, `servidor`, `esp32`, `protocolo`, `mapa`, `pesca`, `loja`.
 4. Se mudar mensagens da rede, atualize **os dois lados** (`protocol.h` e `protocol.odin`), o `docs/protocol.md` e aumente `PROTOCOL_VERSION`.
 5. Se mudar a geração do mapa, mude `world.c` **e** `world.odin` juntos. O checksum no `S_WELCOME` acusa se ficaram diferentes.
 6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e, quando der, no ESP32.
 7. Escreva o que mudou no `CHANGELOG.md`.
 8. Abra um Pull Request no GitHub. O Bertola revisa o código antes de qualquer merge na `main`.
-9. Crie a tag da versão: `git tag v0.5.0 && git push --tags`.
+9. Crie a tag da versão: `git tag v0.6.0 && git push --tags`.
 10. Campo novo no `profile_t` vai sempre no fim, e o `profile_upgrade` em `storage.h` aprende a converter o perfil da versão anterior. Assim ninguém perde a conta.
 
 ## Visão geral
@@ -23,8 +23,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.2 | Nova base: Odin/WASM + ESP32-S3, mapa, rede binária, pesca, cardumes, lojista, ranking | Pronta |
 | v0.3 | Contas com senha, inventário e itens procedurais | Pronta |
 | v0.4 | Upgrades do barco | Pronta |
-| v0.5 | Armas, PvP, morte e drops (bag e coroa) | Próxima |
-| v0.6 | Sereia, mercenário e mecânico | |
+| v0.5 | Armas, PvP, morte e drops (bag e coroa) | Pronta |
+| v0.6 | Sereia, mercenário e mecânico | Próxima |
 | v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | |
 | v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | |
 | v0.9 | Shaders de água, luz e clima; polimento | |
@@ -72,13 +72,18 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 
 **Pronta quando:** um barco com vela e leme no máximo dá a volta na ilha do porto visivelmente mais rápido que um barco novo.
 
-## v0.5: Armas, PvP, morte e drops
+## v0.5: Armas, PvP, morte e drops (pronta)
 
-- [ ] Tiros tiram vida do barco (a vida e a barra no HUD já existem desde a v0.4)
-- [ ] Tiro com a arma equipada, alcance e recarga; dano só no servidor
-- [ ] Vida 0 por tiro = morte (na costa continua sendo só avaria). Ao morrer: cai uma **bag** (peixes do porão) e uma **coroa**, renasce no porto
-- [ ] Zonas seguras perto das ilhas com NPC
-- [ ] Bags e coroas no minimapa (`S_MARKS`)
+**Objetivo:** o mar fica perigoso: quem pesca muito longe do porto pode perder o porão.
+
+- [x] Tiros tiram vida do barco (a vida e a barra no HUD já existem desde a v0.4)
+- [x] Tiro com a arma equipada, alcance e recarga; dano só no servidor (`server/components/game/weapon.c`)
+- [x] Vida 0 por tiro = morte (na costa continua sendo só avaria). Ao morrer: cai uma **bag** (peixes do porão) e uma **coroa**, renasce no porto
+- [x] Zonas seguras perto das ilhas com NPC (por enquanto, o porto)
+- [x] Bags e coroas no minimapa (`S_MARKS`), saque guardado no barco (até 4) e abates/mortes no perfil
+- [x] Perfis da v0.4 convertidos, sem perder contas
+
+**Pronta quando:** dois jogadores fora da zona segura trocam tiros, um afunda, e o outro pega a bag e a coroa que caíram.
 
 ## v0.6: Sereia, mercenário e mecânico
 
