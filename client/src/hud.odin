@@ -93,7 +93,20 @@ draw_hud :: proc() {
 	text(fmt.tprintf("Porão %d/%d", hold_count(), s.capacity), x, y, 20, COLOR_INK)
 	online := fmt.tprintf("%d online", s.online) if !s.offline else "offline"
 	text(online, sw - 14 - text_width(online, 20), y, 20, COLOR_QUIET)
-	y += 32
+	y += 24
+
+	// Vida do barco: verde, amarela abaixo da metade, vermelha no fim.
+	life := "AVARIADO" if s.broken else fmt.tprintf("Vida %d/%d", s.hp, s.hp_max)
+	text(life, x, y, 20, COLOR_INK)
+	vel := fmt.tprintf("Vel %d/%d", s.vel, s.speed)
+	text(vel, sw - 14 - text_width(vel, 20), y, 20, COLOR_QUIET)
+	y += 22
+	frac := f32(s.hp) / f32(max(s.hp_max, 1))
+	bar_w: f32 = PANEL_W - 28
+	bar_color := rl.Color{128, 237, 153, 255} if frac > 0.5 else (COLOR_ACCENT if frac > 0.25 else rl.Color{255, 107, 107, 255})
+	rl.DrawRectangleV({x, y}, {bar_w, 8}, {40, 50, 66, 255})
+	rl.DrawRectangleV({x, y}, {bar_w * frac, 8}, bar_color)
+	y += 18
 
 	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
@@ -114,11 +127,11 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
-	text("WASD/setas navega  E lojista  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
+	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
-	if s.at_dock && !s.shop_open {
-		tip := "Você está no cais. Aperte E para falar com o lojista."
+	if s.at_dock && !s.shop_open && !s.yard_open {
+		tip := "Você está no cais. E: lojista (L)   U: estaleiro (E)"
 		w := text_width(tip, 20)
 		tx := (px - w) / 2
 		rl.DrawRectangleV({tx - 10, 8}, {w + 20, 30}, {0, 0, 0, 170})
@@ -185,6 +198,52 @@ draw_shop :: proc() {
 	text(fmt.tprintf("[T] Vender tudo por %s", money_text(total)), cx, cy, 20, COLOR_ACCENT)
 	cy += 30
 	text("Número vende a espécie.  E ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
+}
+
+// --- estaleiro --------------------------------------------------------------------
+
+draw_shipyard :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 700
+	h: f32 = 330
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	cy := y + 16
+	text("ESTALEIRO", cx, cy, 20, COLOR_ACCENT)
+	cy += 26
+	text("\"Barco bom é barco cuidado. O que vai ser hoje?\"", cx, cy, 20, COLOR_QUIET)
+	cy += 40
+
+	// Cada peça: nível agora, efeito agora -> efeito do próximo nível e o preço.
+	for part in 0 ..< PART_COUNT {
+		lv := s.boat_level[part]
+		text(fmt.tprintf("[%d] %s  nível %d", part + 1, PART_NAMES[part], lv + 1), cx, cy, 20, COLOR_INK)
+		if lv + 1 < BOAT_LEVELS {
+			price := UPGRADE_PRICE[lv + 1]
+			price_text := money_text(price)
+			text(price_text, x + w - 20 - text_width(price_text, 20), cy, 20, COLOR_ACCENT if s.money >= price else COLOR_QUIET)
+			text(fmt.tprintf("%s  ->  %s", part_effect(part, lv), part_effect(part, lv + 1)), cx + 36, cy + 24, 20, COLOR_QUIET)
+		} else {
+			text("máximo", x + w - 20 - text_width("máximo", 20), cy, 20, COLOR_QUIET)
+			text(part_effect(part, lv), cx + 36, cy + 24, 20, COLOR_QUIET)
+		}
+		cy += 56
+	}
+
+	cy += 6
+	missing := s.hp_max - s.hp
+	if missing > 0 {
+		cost := money_text(u32(missing * REPAIR_CENTS_PER_HP))
+		text(fmt.tprintf("[R] Consertar %d de vida por %s", missing, cost), cx, cy, 20, COLOR_ACCENT)
+	} else {
+		text("Casco inteiro, nada para consertar.", cx, cy, 20, COLOR_QUIET)
+	}
+	cy += 34
+	text("Número compra o próximo nível.  U ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
 }
 
 // --- inventário -----------------------------------------------------------------

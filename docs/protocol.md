@@ -26,6 +26,8 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x03` | `C_SELL` | `u8` espécie (`0xFF` = vender tudo). Só funciona no cais |
 | `0x04` | `C_EQUIP` | `u8` índice na bolsa (0 a 11). Equipa no slot do tipo do item; se já estiver equipado, desequipa |
 | `0x05` | `C_DISCARD` | `u8` índice na bolsa. Joga o item fora (desequipa antes) |
+| `0x06` | `C_UPGRADE` | `u8` peça (0 vela, 1 casco, 2 leme). Compra o próximo nível no estaleiro. Só no cais |
+| `0x07` | `C_REPAIR` | Conserta o barco inteiro no estaleiro. Só no cais |
 
 ## Servidor → cliente
 
@@ -40,6 +42,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x87` | `S_MARKS` | a cada 1 s | `u8` n, n × (`u16` x, `u16` y, `u8` tipo, `u8` extra) — pontos do minimapa |
 | `0x88` | `S_PRICES` | a cada 1 s e após vendas | `u16` preço em centavos de cada espécie (9) |
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
+| `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
 
 ### `S_STATE`
 
@@ -48,11 +51,14 @@ u32 tick
 u16 x, u16 y            sua posição
 u32 dinheiro
 u16 capacidade do porão
-u8  velocidade (células/s)
-u8  flags               bit 0 = está no cais
+u8  velocidade máxima (células/s)
+u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
+u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0)
+u16 vida, u16 vida máxima
 u16 porão[9]            quantidade de cada espécie
 u8  jogadores online
-u8  n, n × (u8 id, u16 x, u16 y)                 outros barcos a até 50 células
+u8  n, n × (u8 id, u16 x, u16 y, u8 visual)      outros barcos a até 50 células;
+                        visual = nível do casco × 16 + nível da vela
 u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
 ```
 
@@ -67,6 +73,11 @@ u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
 | 5 | boas-vindas |
 | 6 | achou um baú: `espécie` = tipo do item, `quantidade` = raridade |
 | 7 | achou um baú, mas a bolsa está cheia |
+| 8 | bateu na costa: `quantidade` = dano, `valor` = vida que sobrou |
+| 9 | barco avariado (vida 0): anda a 2 células/s até o reparo |
+| 10 | comprou upgrade: `espécie` = peça, `quantidade` = nível novo, `valor` = preço |
+| 11 | consertou: `quantidade` = vida recuperada, `valor` = preço |
+| 12 | dinheiro não dá: `valor` = preço |
 
 ### `S_INVENTORY`
 
@@ -107,6 +118,22 @@ O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixo
 | 4 | da Sorte | sorte 3–8 |
 
 Raridade: comum 70% (×1,0, 0 ou 1 afixo), raro 22% (×1,3, 1 afixo), épico 7% (×1,65, 2 afixos), lendário 1% (×2,2, 3 afixos). Produção é % a mais na chance de pescar; sorte é a chance de baú, em milésimos, somada aos 4‰ de base a cada peixe.
+
+### Barco e estaleiro
+
+Movimento com inércia: o `C_INPUT` diz para onde o jogador quer ir; a proa gira 45° por vez até apontar para lá, o barco acelera 1 célula/s por tick até a velocidade máxima e, sem tecla, perde 1 célula/s a cada 2 ticks. Parado, vira na hora.
+
+Bater na costa a 4 células/s ou mais tira 2 de vida por célula/s (o cais não estraga). Com vida 0 o barco fica avariado. O reparo custa $0,20 por ponto de vida.
+
+| Nível | Preço | Vela: velocidade | Casco: porão | Casco: vida | Leme: ticks por 45° |
+| --- | --- | --- | --- | --- | --- |
+| 0 | já vem | +0 | 150 | +0 | 5 |
+| 1 | $150 | +1 | 200 | +25 | 4 |
+| 2 | $400 | +2 | 260 | +55 | 3 |
+| 3 | $1000 | +3 | 330 | +90 | 2 |
+| 4 | $2500 | +5 | 420 | +140 | 1 |
+
+A tabela está em `server/components/game/boat.c` e, para a tela do estaleiro, em `client/src/boat.odin`.
 
 ### Marcas do minimapa (`S_MARKS`)
 

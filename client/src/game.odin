@@ -32,6 +32,7 @@ Player_Info :: struct {
 Boat :: struct {
 	id:   u8,
 	x, y: i32,
+	look: u8,
 }
 
 School :: struct {
@@ -89,7 +90,11 @@ State :: struct {
 	money:         u32,
 	capacity:      int,
 	speed:         int,
+	vel:           int,
 	at_dock:       bool,
+	hp, hp_max:    int,
+	broken:        bool,
+	boat_level:    [PART_COUNT]int,
 	hold:          [FISH_COUNT]int,
 	bag:           [BAG_SIZE]Item,
 	stats:         [STAT_COUNT]int, // do barco: base + itens equipados
@@ -113,6 +118,7 @@ State :: struct {
 
 	// interface
 	shop_open:     bool,
+	yard_open:     bool,
 	inv_open:      bool,
 	inv_cursor:    int,
 	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
@@ -137,6 +143,7 @@ init :: proc() {
 	for &p, i in s.prices do p = SPECIES[i].price_cents
 	s.capacity = 150
 	s.speed = 5
+	s.hp, s.hp_max = 100, 100
 }
 
 should_run :: proc() -> bool {
@@ -164,6 +171,7 @@ update :: proc() {
 		draw_world()
 		draw_hud()
 		if s.shop_open do draw_shop()
+		if s.yard_open do draw_shipyard()
 		if s.inv_open do draw_inventory()
 		if s.big_map do draw_big_map()
 	}
@@ -230,11 +238,12 @@ update_playing :: proc() {
 	if rl.IsKeyPressed(.I) {
 		s.inv_open = !s.inv_open
 		s.shop_open = false
+		s.yard_open = false
 		s.discard_armed = false
 	}
 	if s.inv_open do update_inventory()
 	dx, dy: i8
-	if !s.shop_open && !s.inv_open {
+	if !s.shop_open && !s.inv_open && !s.yard_open {
 		if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) do dx -= 1
 		if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) do dx += 1
 		if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) do dy -= 1
@@ -252,12 +261,24 @@ update_playing :: proc() {
 			s.shop_open = false
 		} else if s.at_dock {
 			s.shop_open = true
+			s.yard_open = false
 		} else {
 			add_log("O lojista (L) fica no cais (H) do porto.")
 		}
 	}
+	if rl.IsKeyPressed(.U) && !s.inv_open {
+		if s.yard_open {
+			s.yard_open = false
+		} else if s.at_dock {
+			s.yard_open = true
+			s.shop_open = false
+		} else {
+			add_log("O estaleiro (E) fica no cais (H) do porto.")
+		}
+	}
 	if rl.IsKeyPressed(.ESCAPE) {
 		s.shop_open = false
+		s.yard_open = false
 		s.big_map = false
 		s.inv_open = false
 	}
@@ -267,7 +288,16 @@ update_playing :: proc() {
 		}
 		if rl.IsKeyPressed(.T) do send_sell(FISH_NONE)
 	}
-	if !s.at_dock do s.shop_open = false
+	if s.yard_open {
+		for part in 0 ..< PART_COUNT {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + part)) do send_upgrade(u8(part))
+		}
+		if rl.IsKeyPressed(.R) do send_repair()
+	}
+	if !s.at_dock {
+		s.shop_open = false
+		s.yard_open = false
+	}
 }
 
 // Inventário aberto: W/S escolhem o item, Enter equipa, X duas vezes joga fora.
@@ -363,6 +393,7 @@ on_net_close :: proc() {
 	s.net = .Closed
 	s.screen = .Join
 	s.shop_open = false
+	s.yard_open = false
 	s.inv_open = false
 	s.input_dx, s.input_dy = 0, 0
 	s.join_message = "Conexão perdida. Aperte Enter para tentar de novo."
@@ -443,7 +474,20 @@ on_net_message :: proc(data: []u8) {
 			add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
 		case EV_BAG_FULL:
 			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
+		case EV_CRASH:
+			add_popup({255, 107, 107, 255}, "-%d vida", count)
+			add_log("Bateu na costa! -%d de vida, sobrou %d. Perto da terra, vá devagar.", count, value)
+		case EV_BROKEN:
+			add_log("Barco avariado! Só anda devagar. Conserte no estaleiro (U) do porto.")
+		case EV_UPGRADED:
+			add_popup(COLOR_ACCENT, "%s nível %d!", part_name(species), count + 1)
+			add_log("Estaleiro: %s agora é nível %d, por %s.", part_name(species), count + 1, money_text(value))
+		case EV_REPAIRED:
+			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
+		case EV_NO_MONEY:
+			add_log("Estaleiro: \"Isso custa %s, marujo. Volte com o dinheiro.\"", money_text(value))
 		}
+
 
 	case S_RANK:
 		n := int(read_u8(&r))
@@ -485,6 +529,12 @@ on_net_message :: proc(data: []u8) {
 		for &v in stats do v = int(read_i16(&r))
 		if !r.ok do return
 		s.bag, s.stats = bag, stats
+
+	case S_BOAT:
+		levels: [PART_COUNT]int
+		for &l in levels do l = int(read_u8(&r))
+		if !r.ok do return
+		s.boat_level = levels
 	}
 }
 
@@ -499,14 +549,19 @@ read_state :: proc(r: ^Reader) {
 	s.money = read_u32(r)
 	s.capacity = int(read_u16(r))
 	s.speed = int(read_u8(r))
-	s.at_dock = read_u8(r) & STATE_AT_DOCK != 0
+	s.vel = int(read_u8(r))
+	flags := read_u8(r)
+	s.at_dock = flags & STATE_AT_DOCK != 0
+	s.broken = flags & STATE_BROKEN != 0
+	s.hp = int(read_u16(r))
+	s.hp_max = int(read_u16(r))
 	for &h in s.hold do h = int(read_u16(r))
 	s.online = int(read_u8(r))
 
 	n := int(read_u8(r))
 	s.boat_count = 0
 	for _ in 0 ..< min(n, MAX_PLAYERS) {
-		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r))}
+		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), look = read_u8(r)}
 		if !r.ok || b.id >= MAX_PLAYERS do break
 		s.boats[s.boat_count] = b
 		s.boat_count += 1
