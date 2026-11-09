@@ -103,6 +103,16 @@ view :: proc() -> View {
 	return {cols, rows, s.x - cols / 2, s.y - rows / 2, i32(rl.GetTime() * 10)}
 }
 
+// Célula do mundo embaixo do mouse (ok = false com o mouse em cima do painel).
+mouse_cell :: proc() -> (x, y: i32, ok: bool) {
+	v := view()
+	m := rl.GetMousePosition()
+	if m.x < 0 || m.y < 0 do return 0, 0, false
+	sx, sy := i32(m.x) / CELL_W, i32(m.y) / CELL_H
+	if sx >= v.cols || sy >= v.rows do return 0, 0, false
+	return v.ox + sx, v.oy + sy, true
+}
+
 @(private = "file")
 in_view :: proc(v: View, x, y: i32) -> (sx, sy: i32, ok: bool) {
 	sx, sy = x - v.ox, y - v.oy
@@ -249,6 +259,15 @@ draw_effects :: proc(v: View) {
 		x := f32(sx * CELL_W + CELL_W / 2) - w / 2
 		y := f32(sy * CELL_H) - 24 - f32(age) * 40
 		text(p.text, x, y, 20, {p.color.r, p.color.g, p.color.b, alpha})
+	}
+	// Mira: um + embaixo do mouse, vermelho quando o alvo está no alcance.
+	if wp, _, armed := equipped_weapon(); armed && !s.inv_open && !s.shop_open && !s.yard_open {
+		if mx, my, ok := mouse_cell(); ok {
+			dx, dy := mx - s.x, my - s.y
+			in_range := dx * dx + dy * dy <= i32(wp.range * wp.range)
+			color := rl.Color{255, 90, 90, 255} if in_range && !s.safe else COLOR_QUIET
+			if msx, msy, vis := in_view(v, mx, my); vis do glyph(msx, msy, '+', color)
+		}
 	}
 }
 

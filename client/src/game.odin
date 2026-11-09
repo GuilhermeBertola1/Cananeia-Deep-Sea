@@ -122,6 +122,7 @@ State :: struct {
 	tick:          u32,
 	input_dx:      i8,
 	input_dy:      i8,
+	fire_tick:     u32, // tick do último tiro mandado, para não mandar dois no mesmo
 	offline_move:  f32,
 
 	// o que o servidor mostra
@@ -277,6 +278,24 @@ update_playing :: proc() {
 	}
 	if s.offline do offline_move(dx, dy)
 
+	// Tiro: clique (ou Espaço) atira na célula do mouse. Segurando, atira de
+	// novo assim que a recarga acaba. Quem confere tudo é o servidor.
+	if !s.shop_open && !s.inv_open && !s.yard_open && !s.big_map && !s.offline {
+		pressed := rl.IsMouseButtonPressed(.LEFT) || rl.IsKeyPressed(.SPACE)
+		held := rl.IsMouseButtonDown(.LEFT) || rl.IsKeyDown(.SPACE)
+		_, _, armed := equipped_weapon()
+		if pressed && !armed {
+			add_log("Sem arma! Equipe um arpão, mosquete ou canhão no inventário (I).")
+		} else if pressed && s.safe {
+			add_log("Zona segura: perto do porto ninguém atira.")
+		} else if held && armed && !s.safe && s.reload == 0 && s.tick != s.fire_tick {
+			if mx, my, ok := mouse_cell(); ok {
+				send_fire(mx, my)
+				s.fire_tick = s.tick
+			}
+		}
+	}
+
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
 	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open {
@@ -397,6 +416,10 @@ money_text :: proc(cents: u32) -> string {
 	return fmt.tprintf("$%d,%02d", cents / 100, cents % 100)
 }
 
+player_name :: proc(id: int) -> string {
+	return s.players[id].name if id >= 0 && id < MAX_PLAYERS else "Alguém"
+}
+
 hold_count :: proc() -> int {
 	n := 0
 	for h in s.hold do n += h
@@ -508,6 +531,29 @@ on_net_message :: proc(data: []u8) {
 			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
 		case EV_NO_MONEY:
 			add_log("Estaleiro: \"Isso custa %s, marujo. Volte com o dinheiro.\"", money_text(value))
+		case EV_HIT:
+			// Nos tiros, `species` é o id do outro jogador.
+			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
+		case EV_HURT:
+			add_popup({255, 107, 107, 255}, "-%d vida", count)
+			add_log("%s te acertou! -%d de vida, sobrou %d.", player_name(species), count, value)
+		case EV_SAFE_ZONE:
+			add_log("Zona segura: perto do porto ninguém atira.")
+		case EV_KILL:
+			add_popup(COLOR_ACCENT, "Afundou %s!", player_name(species))
+			add_log("Você afundou %s! A bag e a coroa ficaram boiando.", player_name(species))
+		case EV_DIED:
+			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", player_name(species), count)
+		case EV_LOOT:
+			what := "bag" if species == LOOT_BAG else "coroa"
+			if count == 1 {
+				add_log("Recuperou sua %s!", what)
+			} else {
+				add_popup(COLOR_ACCENT, "+%s", what)
+				add_log("Pegou uma %s! Veja no inventário (I).", what)
+			}
+		case EV_LOOT_FULL:
+			add_log("O barco já carrega %d saques: não cabe mais nenhum.", LOOT_SLOTS)
 		}
 
 

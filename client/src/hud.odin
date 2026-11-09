@@ -107,7 +107,18 @@ draw_hud :: proc() {
 	bar_color := rl.Color{128, 237, 153, 255} if frac > 0.5 else (COLOR_ACCENT if frac > 0.25 else rl.Color{255, 107, 107, 255})
 	rl.DrawRectangleV({x, y}, {bar_w, 8}, {40, 50, 66, 255})
 	rl.DrawRectangleV({x, y}, {bar_w * frac, 8}, bar_color)
-	y += 18
+	y += 14
+
+	// Arma: pronta ou recarregando. Na zona segura, o aviso no lugar.
+	if s.safe {
+		text("Zona segura: ninguém atira aqui", x, y, 10, {128, 237, 153, 255})
+	} else if _, base, armed := equipped_weapon(); armed {
+		state := "pronta" if s.reload == 0 else "recarregando..."
+		text(fmt.tprintf("%s: %s", item_name(base), state), x, y, 10, COLOR_INK if s.reload == 0 else COLOR_QUIET)
+	} else {
+		text("Sem arma: equipe uma no inventário (I)", x, y, 10, COLOR_QUIET)
+	}
+	y += 16
 
 	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
@@ -128,6 +139,7 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
+	text("Clique ou Espaço atira na mira (+)", x, sh - 32, 10, COLOR_QUIET)
 	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
