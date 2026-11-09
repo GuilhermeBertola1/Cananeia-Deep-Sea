@@ -195,19 +195,39 @@ draw_label :: proc(v: View, x, y: i32, str: string, color: rl.Color) {
 	text(str, f32(sx * CELL_W + CELL_W / 2) - w / 2, f32(sy * CELL_H + 4), 10, color)
 }
 
+HULL_SHAPES := [BOAT_LEVELS]string{"@", "(@)", "\\@/", "\\=@=/", "<\\=@=/>"}
+SAIL_SHAPES := [BOAT_LEVELS]string{"", "|", "/|", "/|\\", "/#\\"}
+
+// Escreve `shape` na linha y, centralizado na coluna x.
+@(private = "file")
+draw_shape :: proc(v: View, x, y: i32, shape: string, color: rl.Color) {
+	left := x - i32(len(shape) / 2)
+	for ch, i in shape {
+		if sx, sy, ok := in_view(v, left + i32(i), y); ok do glyph(sx, sy, ch, color)
+	}
+}
+
+@(private = "file")
+draw_boat :: proc(v: View, x, y: i32, hull, sail: int, color: rl.Color) {
+	draw_shape(v, x, y, HULL_SHAPES[clamp(hull, 0, BOAT_LEVELS - 1)], color)
+	draw_shape(v, x, y - 1, SAIL_SHAPES[clamp(sail, 0, BOAT_LEVELS - 1)], color)
+}
+
 @(private = "file")
 draw_boats :: proc(v: View) {
 	for b in s.boats[:s.boat_count] {
 		p := s.players[b.id]
 		color := PLAYER_COLORS[p.color % len(PLAYER_COLORS)]
-		if sx, sy, ok := in_view(v, b.x, b.y); ok do glyph(sx, sy, '@', color)
-		draw_label(v, b.x, b.y - 1, p.name, rl.WHITE)
+		hull, sail := int(b.look >> 4), int(b.look & 0xF)
+		draw_boat(v, b.x, b.y, hull, sail, color)
+		label_y := b.y - 1
+		if sail > 0 do label_y -= 1
+		draw_label(v, b.x, label_y, p.name, rl.WHITE)
 	}
 	sx, sy, _ := in_view(v, s.x, s.y)
-	// Um brilho em volta do seu barco para achar ele fácil.
 	pulse := u8(60 + 40 * math.sin(rl.GetTime() * 4))
 	rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, {255, 209, 102, pulse})
-	glyph(sx, sy, '@', COLOR_ACCENT)
+	draw_boat(v, s.x, s.y, s.boat_level[PART_HULL], s.boat_level[PART_SAIL], COLOR_ACCENT)
 }
 
 @(private = "file")
