@@ -22,6 +22,7 @@ enum {
     C_REPAIR = 0x07,
     C_FIRE = 0x08,
     C_MERC = 0x09,
+    C_MERMAID = 0x0A, // u8 ação (MERMAID_*)
 };
 
 // Servidor -> cliente
@@ -43,8 +44,11 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_CRASH = 8, EV_BROKEN = 9, EV_UPGRADED = 10, EV_REPAIRED = 11, EV_NO_MONEY = 12,
        EV_HIT = 13, EV_HURT = 14, EV_SAFE_ZONE = 15,
        EV_KILL = 16, EV_DIED = 17, EV_LOOT = 18, EV_LOOT_FULL = 19,
-       EV_MERC = 20, EV_MERC_NOTHING = 21 };
-enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3 };
+       EV_MERC = 20, EV_MERC_NOTHING = 21,
+       EV_SPIN_WAIT = 22, EV_SPIN_STEAL = 23, EV_SPIN_MISSION = 24, EV_HUNTED = 25, EV_SPIN_NOTHING = 26,
+       EV_MISSION_WAIT = 27, EV_ENCHANT = 28, EV_NOTHING_TO_ENCHANT = 29, EV_MISSION_GIVE_UP = 30 };
+enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4 };
+enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
 enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.

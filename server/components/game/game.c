@@ -26,6 +26,14 @@
 // Posição do tiro em 1/256 de célula, para andar em qualquer ângulo só com inteiros.
 #define SUB 256
 #define CROWN_BOUNTY_CENTS 2500 // o mercenário paga $25 por coroa
+// A sereia mora numa pedra em mar aberto, longe do porto.
+#define MERMAID_MIN_DIST 70
+#define MERMAID_MAX_DIST 110
+#define MERMAID_REACH 3   // até quantas células dá para falar com ela
+#define MERMAID_SAFE_R 8  // zona segura em volta da pedra
+#define SPIN_COOLDOWN (60 * TICK_HZ) // uma volta na roleta por minuto
+#define STEAL_PCT 10
+#define STEAL_MAX_CENTS 10000 // ela rouba 10% do dinheiro, no máximo $100
 
 // Mercado: vender 200 de uma espécie derruba o preço pela metade,
 // nunca abaixo de 30%, e a pressão cai 1% por segundo.
@@ -47,6 +55,7 @@ typedef struct {
     uint8_t move_budget; // em décimos de célula
     uint8_t blocked;
     uint8_t reload;
+    uint32_t next_spin; // tick em que a roleta da sereia libera de novo
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
 } player_t;
@@ -76,15 +85,13 @@ typedef struct {
     loot_t loot;
 } drop_t;
 
-// Ilhas com NPC: perto delas ninguém toma tiro. Por enquanto só o porto.
+// Lugares com NPC: perto deles ninguém toma tiro. O porto e a pedra da
+// sereia (que só se sabe onde fica depois de gerar o mapa, em game_init).
 typedef struct {
     int16_t x, y, r;
 } safe_zone_t;
 
-static const safe_zone_t SAFE_ZONES[] = {
-    {PORT_X, PORT_Y, PORT_RADIUS + 14},
-};
-#define SAFE_ZONE_COUNT (int)(sizeof SAFE_ZONES / sizeof SAFE_ZONES[0])
+enum { ZONE_PORT = 0, ZONE_MERMAID, SAFE_ZONE_COUNT };
 
 static struct {
     uint8_t *tiles;
@@ -96,6 +103,7 @@ static struct {
     drop_t drops[MAX_DROPS];
     profile_t profiles[MAX_PROFILES];
     uint32_t pressure[FISH_COUNT];
+    safe_zone_t safe_zones[SAFE_ZONE_COUNT];
 } g;
 
 static uint8_t out[1024];
@@ -140,10 +148,17 @@ static int at_dock(const player_t *p) {
 
 static int in_safe_zone(int x, int y) {
     for (int i = 0; i < SAFE_ZONE_COUNT; i++) {
-        int dx = x - SAFE_ZONES[i].x, dy = y - SAFE_ZONES[i].y;
-        if (dx * dx + dy * dy <= SAFE_ZONES[i].r * SAFE_ZONES[i].r) return 1;
+        const safe_zone_t *z = &g.safe_zones[i];
+        int dx = x - z->x, dy = y - z->y;
+        if (dx * dx + dy * dy <= z->r * z->r) return 1;
     }
     return 0;
+}
+
+static int near_mermaid(const player_t *p) {
+    const safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
+    return p->x >= z->x - MERMAID_REACH && p->x <= z->x + MERMAID_REACH && p->y >= z->y - MERMAID_REACH &&
+           p->y <= z->y + MERMAID_REACH;
 }
 
 // Raiz quadrada inteira (arredonda para baixo).
@@ -247,6 +262,11 @@ static void send_marks(int slot) {
         put_u8(&w, 0);
         n++;
     }
+    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].x);
+    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].y);
+    put_u8(&w, MARK_MERMAID);
+    put_u8(&w, 0);
+    n++;
     out[count_at] = n;
     slot < 0 ? send_all(&w) : send_w(slot, &w);
 }
@@ -623,6 +643,95 @@ static void mercenary(int slot) {
     send_event(slot, EV_MERC, (uint8_t)left, (uint16_t)got, bounty);
     send_inventory(slot);
     if (bounty) send_rank(-1);
+}
+
+// Roleta da sereia: pode roubar seu dinheiro, dar a missão de afundar
+// alguém ou só cantar.
+static void spin(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (g.tick < p->next_spin) {
+        send_event(slot, EV_SPIN_WAIT, FISH_NONE, 0, (p->next_spin - g.tick + TICK_HZ - 1) / TICK_HZ);
+        return;
+    }
+    p->next_spin = g.tick + SPIN_COOLDOWN;
+    uint32_t r = rnd_below(100);
+    if (r < 40) {
+        uint32_t stolen = pr->money * STEAL_PCT / 100;
+        if (stolen > STEAL_MAX_CENTS) stolen = STEAL_MAX_CENTS;
+        pr->money -= stolen;
+        storage_save(p->profile, pr);
+        send_event(slot, EV_SPIN_STEAL, FISH_NONE, 0, stolen);
+        if (stolen) send_rank(-1);
+        return;
+    }
+    if (r < 85) {
+        // Alvo: alguém online, se tiver. Senão, qualquer capitão já criado.
+        int online[MAX_PLAYERS], n_online = 0, n_any = 0;
+        for (int i = 0; i < MAX_PLAYERS; i++)
+            if (i != slot && g.players[i].state == SLOT_PLAYING) online[n_online++] = i;
+        for (int i = 0; i < MAX_PROFILES; i++) n_any += g.profiles[i].used && i != p->profile;
+        int target = -1;
+        if (n_online) {
+            int hunted = online[rnd_below((uint32_t)n_online)];
+            target = g.players[hunted].profile;
+            send_event(hunted, EV_HUNTED, (uint8_t)slot, 0, 0);
+        } else if (n_any) {
+            int k = (int)rnd_below((uint32_t)n_any);
+            for (int i = 0; i < MAX_PROFILES && target < 0; i++)
+                if (g.profiles[i].used && i != p->profile && k-- == 0) target = i;
+        }
+        if (target >= 0) {
+            pr->has_mission = 1;
+            pr->mission_target = (uint8_t)target;
+            storage_save(p->profile, pr);
+            send_inventory(slot); // leva o nome do alvo
+            send_event(slot, EV_SPIN_MISSION, FISH_NONE, 0, 0);
+            return;
+        }
+    }
+    send_event(slot, EV_SPIN_NOTHING, FISH_NONE, 0, 0);
+}
+
+// Entregar a coroa do alvo: a sereia encanta um item aleatório da bolsa.
+static void deliver_crown(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    int crown = -1;
+    for (int i = 0; i < LOOT_SLOTS && crown < 0; i++)
+        if (pr->loot[i].kind == LOOT_CROWN && pr->loot[i].owner == pr->mission_target) crown = i;
+    if (crown < 0) { send_event(slot, EV_MISSION_WAIT, FISH_NONE, 0, 0); return; }
+
+    int options[BAG_SIZE], n = 0;
+    for (int i = 0; i < BAG_SIZE; i++)
+        if (pr->bag[i].base != ITEM_NONE && pr->enchant[i] < ENCHANT_MAX) options[n++] = i;
+    if (!n) { send_event(slot, EV_NOTHING_TO_ENCHANT, FISH_NONE, 0, 0); return; }
+
+    int pick = options[rnd_below((uint32_t)n)];
+    pr->enchant[pick]++;
+    pr->loot[crown] = (loot_t){0};
+    pr->has_mission = 0;
+    update_stats(p); // se o item estava equipado, o barco já sente
+    storage_save(p->profile, pr);
+    send_event(slot, EV_ENCHANT, pr->bag[pick].base, pr->enchant[pick], (uint32_t)pick);
+    send_inventory(slot);
+}
+
+static void mermaid(int slot, uint8_t action) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!near_mermaid(p)) return;
+    if (action == MERMAID_GIVE_UP) {
+        if (!pr->has_mission) return;
+        pr->has_mission = 0;
+        storage_save(p->profile, pr);
+        send_event(slot, EV_MISSION_GIVE_UP, FISH_NONE, 0, 0);
+        send_inventory(slot);
+    } else if (pr->has_mission) {
+        deliver_crown(slot);
+    } else {
+        spin(slot);
+    }
 }
 
 static int try_move(player_t *p) {
@@ -1004,6 +1113,27 @@ static void join(int slot, const uint8_t *data, size_t len) {
     send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
 }
 
+// A pedra da sereia: sempre no mesmo lugar para o mesmo mapa (sai da semente
+// do mapa, não do sorteio do servidor). Água em volta para dar para chegar.
+static void place_mermaid(void) {
+    safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
+    *z = (safe_zone_t){PORT_X + 16, PORT_Y, MERMAID_SAFE_R}; // se não achar lugar
+    for (int i = 0; i < 5000; i++) {
+        uint32_t h = world_hash(i, 0x5E7EA, g.seed);
+        int dx = (int)(h % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
+        int dy = (int)((h >> 16) % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
+        int d2 = dx * dx + dy * dy;
+        if (d2 < MERMAID_MIN_DIST * MERMAID_MIN_DIST || d2 > MERMAID_MAX_DIST * MERMAID_MAX_DIST) continue;
+        int water = 1;
+        for (int y = -2; y <= 2 && water; y++)
+            for (int x = -2; x <= 2 && water; x++) water = tile_is_water(tile(PORT_X + dx + x, PORT_Y + dy + y));
+        if (!water) continue;
+        z->x = (int16_t)(PORT_X + dx);
+        z->y = (int16_t)(PORT_Y + dy);
+        return;
+    }
+}
+
 // --- API --------------------------------------------------------------------
 
 void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn send) {
@@ -1014,6 +1144,8 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     g.send = send;
     world_generate(tiles, seed);
     g.checksum = world_checksum(tiles);
+    g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
+    place_mermaid();
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
 }
@@ -1072,6 +1204,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_MERC:
         mercenary(slot);
+        break;
+    case C_MERMAID:
+        if (len >= 2) mermaid(slot, data[1]);
         break;
     }
 }
