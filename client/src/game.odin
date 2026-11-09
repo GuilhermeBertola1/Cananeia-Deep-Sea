@@ -13,6 +13,7 @@ RANK_SIZE :: 10
 MAX_SHOTS :: 32
 MAX_MARKS :: 103 // cardumes (70) + bags e coroas (32) + a sereia
 LOOT_SLOTS :: 4
+CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
 LOG_SIZE :: 6
 
 Screen :: enum {
@@ -147,6 +148,8 @@ State :: struct {
 	shop_open:     bool,
 	yard_open:     bool,
 	inv_open:      bool,
+	merc_open:     bool,
+	mermaid_open:  bool,
 	inv_cursor:    int,
 	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
 	big_map:       bool,
@@ -199,6 +202,8 @@ update :: proc() {
 		draw_hud()
 		if s.shop_open do draw_shop()
 		if s.yard_open do draw_shipyard()
+		if s.merc_open do draw_mercenary()
+		if s.mermaid_open do draw_mermaid()
 		if s.inv_open do draw_inventory()
 		if s.big_map do draw_big_map()
 	}
@@ -260,17 +265,30 @@ start_offline :: proc() {
 
 // --- jogando -------------------------------------------------------------------
 
+// Alguma janela aberta (NPC ou inventário): o barco não anda nem atira.
+menu_open :: proc() -> bool {
+	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open
+}
+
+// Fecha as janelas dos NPCs. O inventário fica como está.
+@(private = "file")
+close_npcs :: proc() {
+	s.shop_open = false
+	s.yard_open = false
+	s.merc_open = false
+	s.mermaid_open = false
+}
+
 @(private = "file")
 update_playing :: proc() {
 	if rl.IsKeyPressed(.I) {
 		s.inv_open = !s.inv_open
-		s.shop_open = false
-		s.yard_open = false
+		close_npcs()
 		s.discard_armed = false
 	}
 	if s.inv_open do update_inventory()
 	dx, dy: i8
-	if !s.shop_open && !s.inv_open && !s.yard_open {
+	if !menu_open() {
 		if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) do dx -= 1
 		if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) do dx += 1
 		if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) do dy -= 1
@@ -284,7 +302,7 @@ update_playing :: proc() {
 
 	// Tiro: clique (ou Espaço) atira na célula do mouse. Segurando, atira de
 	// novo assim que a recarga acaba. Quem confere tudo é o servidor.
-	if !s.shop_open && !s.inv_open && !s.yard_open && !s.big_map && !s.offline {
+	if !menu_open() && !s.big_map && !s.offline {
 		pressed := rl.IsMouseButtonPressed(.LEFT) || rl.IsKeyPressed(.SPACE)
 		held := rl.IsMouseButtonDown(.LEFT) || rl.IsKeyDown(.SPACE)
 		_, _, armed := equipped_weapon()
@@ -301,12 +319,16 @@ update_playing :: proc() {
 	}
 
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
+	// E fala com quem está perto: o lojista no cais, a sereia na pedra dela.
 	if rl.IsKeyPressed(.E) && !s.inv_open {
-		if s.shop_open {
-			s.shop_open = false
+		if s.shop_open || s.mermaid_open {
+			close_npcs()
 		} else if s.at_dock {
+			close_npcs()
 			s.shop_open = true
-			s.yard_open = false
+		} else if s.at_mermaid {
+			close_npcs()
+			s.mermaid_open = true
 		} else {
 			add_log("O lojista (L) fica no cais (H) do porto.")
 		}
@@ -315,15 +337,24 @@ update_playing :: proc() {
 		if s.yard_open {
 			s.yard_open = false
 		} else if s.at_dock {
+			close_npcs()
 			s.yard_open = true
-			s.shop_open = false
 		} else {
 			add_log("O estaleiro (E) fica no cais (H) do porto.")
 		}
 	}
+	if rl.IsKeyPressed(.B) && !s.inv_open {
+		if s.merc_open {
+			s.merc_open = false
+		} else if s.at_dock {
+			close_npcs()
+			s.merc_open = true
+		} else {
+			add_log("O mercenário (M) fica no cais (H) do porto.")
+		}
+	}
 	if rl.IsKeyPressed(.ESCAPE) {
-		s.shop_open = false
-		s.yard_open = false
+		close_npcs()
 		s.big_map = false
 		s.inv_open = false
 	}
@@ -339,10 +370,17 @@ update_playing :: proc() {
 		}
 		if rl.IsKeyPressed(.R) do send_repair()
 	}
+	if s.merc_open && rl.IsKeyPressed(.T) do send_merc()
+	if s.mermaid_open {
+		if rl.IsKeyPressed(.G) do send_mermaid(MERMAID_TALK)
+		if rl.IsKeyPressed(.X) && s.has_mission do send_mermaid(MERMAID_GIVE_UP)
+	}
 	if !s.at_dock {
 		s.shop_open = false
 		s.yard_open = false
+		s.merc_open = false
 	}
+	if !s.at_mermaid do s.mermaid_open = false
 }
 
 // Inventário aberto: W/S escolhem o item, Enter equipa, X duas vezes joga fora.
@@ -446,8 +484,7 @@ on_net_open :: proc() {
 on_net_close :: proc() {
 	s.net = .Closed
 	s.screen = .Join
-	s.shop_open = false
-	s.yard_open = false
+	close_npcs()
 	s.inv_open = false
 	s.input_dx, s.input_dy = 0, 0
 	s.join_message = "Conexão perdida. Aperte Enter para tentar de novo."
@@ -563,6 +600,43 @@ on_net_message :: proc(data: []u8) {
 			}
 		case EV_LOOT_FULL:
 			add_log("O barco já carrega %d saques: não cabe mais nenhum.", LOOT_SLOTS)
+		case EV_MERC:
+			if value > 0 do add_popup(COLOR_ACCENT, "+%s", money_text(value))
+			add_log("Mercenário: \"Passei %d peixe(s) para o seu porão e paguei %s pelas coroas.\"", count, money_text(value))
+			if species == 1 do add_log("O porão encheu e o resto ficou na bag. Venda os peixes e volte.")
+		case EV_MERC_NOTHING:
+			if species == 1 {
+				add_log("Mercenário: \"Seu porão está cheio. Venda os peixes primeiro.\"")
+			} else {
+				add_log("Mercenário: \"Sem bag nem coroa, sem negócio.\"")
+			}
+		case EV_SPIN_WAIT:
+			add_log("Sereia: \"Volte daqui a %d segundos, marujo.\"", value)
+		case EV_SPIN_STEAL:
+			if value > 0 {
+				add_popup({255, 107, 107, 255}, "-%s", money_text(value))
+				add_log("A sereia te encantou com a voz e levou %s!", money_text(value))
+			} else {
+				add_log("A sereia tentou te roubar, mas seu bolso estava vazio.")
+			}
+		case EV_SPIN_MISSION:
+			add_popup(COLOR_MERMAID, "Missão: %s", mission_target())
+			add_log("Sereia: \"Afunde %s e me traga a coroa. Eu encanto um item seu.\"", mission_target())
+		case EV_HUNTED:
+			add_popup({255, 107, 107, 255}, "Caçado!")
+			add_log("A sereia mandou %s atrás da sua coroa. Cuidado no mar aberto!", player_name(species))
+		case EV_SPIN_NOTHING:
+			add_log("A sereia só cantou. Que voz!")
+		case EV_MISSION_WAIT:
+			add_log("Sereia: \"Cadê a coroa de %s? Afunde o barco e pegue a coroa no mar.\"", mission_target())
+		case EV_ENCHANT:
+			// No encanto, `species` é o tipo do item e `count` o nível novo.
+			add_popup(COLOR_MERMAID, "%s +%d!", item_name(u8(species)), count)
+			add_log("A sereia encantou seu %s: agora é +%d. Veja no inventário (I).", item_name(u8(species)), count)
+		case EV_NOTHING_TO_ENCHANT:
+			add_log("Sereia: \"Não tenho o que encantar. Traga um item na bolsa.\"")
+		case EV_MISSION_GIVE_UP:
+			add_log("Você desistiu da missão da sereia.")
 		}
 
 
