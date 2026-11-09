@@ -42,6 +42,19 @@
 #define VILLAGE_SPACING 50    // de outra vila ou da sereia
 #define VILLAGE_SAFE_R 10
 #define VILLAGE_BONUS_PCT 25  // a mais pela espécie preferida
+// Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
+// nem nas zonas seguras, então a costa é um refúgio.
+#define MAX_PREDATORS 12
+#define SHARK_COUNT 10            // quantos tubarões o mar tenta manter
+#define SHARK_RESPAWN (30 * TICK_HZ) // um tubarão novo a cada 30 s, se faltar
+#define SHARK_HP 40
+#define SHARK_BITE 8              // dano de cada mordida
+#define SHARK_BITE_EVERY 15       // ticks entre mordidas (1,5 s)
+#define SHARK_SENSE 15            // de quantas células ele sente a presa
+#define SHARK_WEAK_HP 120         // barco com menos vida que isso é presa
+#define SHARK_SPEED_WANDER 3      // células por segundo, passeando
+#define SHARK_SPEED_CHASE 7       // e caçando: o barco de fábrica faz 5
+#define SHARK_BOUNTY_CENTS 1500   // $15 por tubarão afundado
 
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
@@ -114,6 +127,18 @@ typedef struct {
     int16_t x, y, r;
 } safe_zone_t;
 
+typedef enum { PRED_SHARK = 0 } predator_kind_t;
+
+typedef struct {
+    uint8_t alive, kind;
+    int16_t x, y;
+    int16_t hp;
+    int8_t target;       // slot do barco que ele caça (-1 = nenhum)
+    uint8_t heading;     // para onde nada quando só está passeando (0 a 7)
+    uint8_t move_budget; // em décimos de célula, igual ao barco
+    uint8_t bite;        // ticks até poder morder de novo
+} predator_t;
+
 enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
 
 // Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
@@ -136,6 +161,8 @@ static struct {
     uint8_t stock[REGIONS_X * REGIONS_Y]; // peixes em cada região (0 a STOCK_MAX)
     village_t villages[VILLAGE_COUNT];
     int village_count; // quantas couberam no mapa (normalmente todas)
+    predator_t predators[MAX_PREDATORS];
+    uint32_t next_shark; // tick em que pode nascer outro tubarão
 } g;
 
 static uint8_t out[1024];
@@ -234,6 +261,13 @@ static uint32_t isqrt(uint32_t n) {
         bit >>= 2;
     }
     return r;
+}
+
+static int iabs(int v) { return v < 0 ? -v : v; }
+
+static int far_from(int x, int y, int ox, int oy, int dist) {
+    int dx = x - ox, dy = y - oy;
+    return dx * dx + dy * dy >= dist * dist;
 }
 
 // Célula onde o tiro está (arredonda para a mais perto).
@@ -926,8 +960,10 @@ static void drop_loot(int x, int y, const loot_t *loot) {
     g.drops[pick] = (drop_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .expires = g.tick + DROP_LIFE, .loot = *loot};
 }
 
-// Morte por tiro: o porão vira uma bag, cai a coroa, cai o saque que o barco
+// Morte por tiro ou mordida: o porão vira uma bag, cai a coroa, cai o saque que o barco
 // carregava e o jogador renasce no porto com o barco inteiro.
+// `killer` é o slot de quem atirou, -1 se ele saiu do jogo, ou
+// KILLER_PREDATOR + tipo quando foi um bicho.
 static void die(int slot, int killer) {
     player_t *p = &g.players[slot];
     profile_t *pr = prof(p);
@@ -952,7 +988,7 @@ static void die(int slot, int killer) {
     send_event(slot, EV_DIED, (uint8_t)killer, (uint16_t)fish, 0);
     send_inventory(slot);
 
-    if (killer >= 0 && g.players[killer].state == SLOT_PLAYING) {
+    if (killer >= 0 && killer < MAX_PLAYERS && g.players[killer].state == SLOT_PLAYING) {
         prof(&g.players[killer])->kills++;
         send_event(killer, EV_KILL, (uint8_t)slot, 0, 0);
     }
@@ -1012,6 +1048,22 @@ static void update_drops(void) {
     if (changed) send_marks(-1);
 }
 
+// Tiro num bicho. Quem afunda leva a recompensa.
+static void hit_predator(predator_t *pd, const shot_t *sh) {
+    int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
+    pd->hp = (int16_t)(pd->hp - sh->damage);
+    if (pd->hp > 0) {
+        if (shooter >= 0) send_event(shooter, EV_PREDATOR_HIT, pd->kind, sh->damage, (uint32_t)pd->hp);
+        return;
+    }
+    pd->alive = 0;
+    if (shooter < 0) return;
+    profile_t *pr = prof(&g.players[shooter]);
+    pr->money += SHARK_BOUNTY_CENTS;
+    send_event(shooter, EV_PREDATOR_KILL, pd->kind, 0, SHARK_BOUNTY_CENTS);
+    send_rank(-1);
+}
+
 // O tiro anda uma célula por vez (até `speed` por tick), para não pular
 // por cima de um barco. Some ao bater num barco, na terra ou no fim do alcance.
 static void update_shots(void) {
@@ -1030,7 +1082,101 @@ static void update_shots(void) {
                 sh->alive = 0;
                 break;
             }
+            for (int k = 0; sh->alive && k < MAX_PREDATORS; k++) {
+                predator_t *pd = &g.predators[k];
+                if (!pd->alive || pd->y != cy || pd->x < cx - 1 || pd->x > cx + 1) continue;
+                hit_predator(pd, sh);
+                sh->alive = 0;
+            }
         }
+    }
+}
+
+// --- predadores ---------------------------------------------------------------
+
+static int shark_water(int x, int y) {
+    tile_t t = tile(x, y);
+    return (t == TILE_DEEP || t == TILE_WATER) && !in_safe_zone(x, y);
+}
+
+// Presa: barco no jogo, com pouca vida e fora da zona segura.
+static int is_prey(const player_t *p) {
+    return p->state == SLOT_PLAYING && hp(p) < SHARK_WEAK_HP && !in_safe_zone(p->x, p->y);
+}
+
+// Um passo de uma célula; na diagonal, desliza pela beira como o barco.
+static int pred_step(predator_t *pd, int dx, int dy) {
+    if (shark_water(pd->x + dx, pd->y + dy)) return pd->x += dx, pd->y += dy, 1;
+    if (dx && dy && shark_water(pd->x + dx, pd->y)) return pd->x += dx, 1;
+    if (dx && dy && shark_water(pd->x, pd->y + dy)) return pd->y += dy, 1;
+    return 0;
+}
+
+static void spawn_shark(void) {
+    for (int i = 0; i < MAX_PREDATORS; i++) {
+        predator_t *pd = &g.predators[i];
+        if (pd->alive) continue;
+        for (int tries = 0; tries < 200; tries++) {
+            int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+            if (tile(x, y) != TILE_DEEP || !far_from(x, y, PORT_X, PORT_Y, 50) || in_safe_zone(x, y)) continue;
+            *pd = (predator_t){.alive = 1, .kind = PRED_SHARK, .x = (int16_t)x, .y = (int16_t)y, .hp = SHARK_HP,
+                               .target = -1, .heading = (uint8_t)rnd_below(8)};
+            return;
+        }
+        return;
+    }
+}
+
+static void bite(int slot, const predator_t *pd) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    pr->damage = (uint16_t)(pr->damage + SHARK_BITE > hp_max(p) ? hp_max(p) : pr->damage + SHARK_BITE);
+    update_stats(p);
+    send_event(slot, EV_BITTEN, pd->kind, SHARK_BITE, (uint32_t)hp(p));
+    if (hp(p) == 0) die(slot, KILLER_PREDATOR + pd->kind);
+}
+
+static void update_predators(void) {
+    int alive = 0;
+    for (int i = 0; i < MAX_PREDATORS; i++) {
+        predator_t *pd = &g.predators[i];
+        if (!pd->alive) continue;
+        alive++;
+        if (pd->bite) pd->bite--;
+        // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
+        if (pd->target >= 0) {
+            const player_t *t = &g.players[pd->target];
+            if (!is_prey(t) || far_from(t->x, t->y, pd->x, pd->y, SHARK_SENSE * 2)) pd->target = -1;
+        }
+        // Sem presa, procura uma vez por segundo: o barco fraco mais perto.
+        if (pd->target < 0 && g.tick % TICK_HZ == 0) {
+            int best = SHARK_SENSE * SHARK_SENSE + 1;
+            for (int t = 0; t < MAX_PLAYERS; t++) {
+                const player_t *p = &g.players[t];
+                int dx = p->x - pd->x, dy = p->y - pd->y;
+                if (is_prey(p) && dx * dx + dy * dy < best) best = dx * dx + dy * dy, pd->target = (int8_t)t;
+            }
+        }
+        const player_t *prey = pd->target >= 0 ? &g.players[pd->target] : 0;
+        pd->move_budget += prey ? SHARK_SPEED_CHASE : SHARK_SPEED_WANDER;
+        while (pd->move_budget >= 10) {
+            pd->move_budget -= 10;
+            if (prey) {
+                int dx = (prey->x > pd->x) - (prey->x < pd->x), dy = (prey->y > pd->y) - (prey->y < pd->y);
+                if (iabs(prey->x - pd->x) <= 1 && iabs(prey->y - pd->y) <= 1) break; // já está colado
+                pred_step(pd, dx, dy);
+            } else if (!pred_step(pd, DIR_X[pd->heading], DIR_Y[pd->heading]) || rnd_below(10) == 0) {
+                pd->heading = (uint8_t)rnd_below(8); // bateu na beira ou cansou: muda de rumo
+            }
+        }
+        if (prey && !pd->bite && iabs(prey->x - pd->x) <= 1 && iabs(prey->y - pd->y) <= 1) {
+            pd->bite = SHARK_BITE_EVERY;
+            bite(pd->target, pd);
+        }
+    }
+    if (alive < SHARK_COUNT && g.tick >= g.next_shark) {
+        spawn_shark();
+        g.next_shark = g.tick + SHARK_RESPAWN;
     }
 }
 
@@ -1262,11 +1408,6 @@ static void place_mermaid(void) {
     }
 }
 
-static int far_from(int x, int y, int ox, int oy, int dist) {
-    int dx = x - ox, dy = y - oy;
-    return dx * dx + dy * dy >= dist * dist;
-}
-
 // Vilas: como a sereia, saem da semente do mapa, então ficam sempre no mesmo
 // lugar. O cais é uma célula de água com terra do lado (a costa de uma
 // ilha), e a água em volta deixa o barco encostar.
@@ -1314,6 +1455,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
+    for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
 }
 
 int game_connect(void) {
@@ -1393,6 +1535,7 @@ void game_tick(void) {
         if (g.players[i].state == SLOT_PLAYING) update_player(i);
     
     update_shots();
+    update_predators();
     update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) send_state(i);
