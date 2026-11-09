@@ -9,12 +9,15 @@ BAG_SIZE :: 12
 STAT_COUNT :: 5
 MAX_AFFIXES :: 3
 AFFIX_NONE :: 0xFF
+RARITY_LEGENDARY :: 3
+ENCHANT_MAX :: 3
 ITEM_NONE :: 0
 
 Item :: struct {
 	base:     u8, // ITEM_NONE = slot vazio
 	rarity:   u8,
 	equipped: u8, // 0 = não; 1 arma, 2 ferramenta, 3 a 5 boosts
+	enchant:  u8, // nível do encanto da sereia (0 a 3), já somado nos stats
 	affix:    [MAX_AFFIXES]u8,
 	stats:    [STAT_COUNT]int,
 }
@@ -47,6 +50,17 @@ RARITY_COLORS := [?]rl.Color {
 }
 
 EQUIP_NAMES := [?]string{"", "arma", "ferramenta", "boost", "boost", "boost"}
+
+// Mecânico: preço pela raridade mínima do item que sai (igual ao game.c).
+COMBINE_PRICE := [4]u32{0, 8000, 25000, 60000}
+
+// Raridade mínima do item que o mecânico faz juntando a e b: a do melhor
+// dos dois, ou uma acima se forem iguais. Mesma conta do servidor.
+combine_rarity :: proc(a, b: Item) -> u8 {
+	r := max(a.rarity, b.rarity)
+	if a.rarity == b.rarity && r < RARITY_LEGENDARY do r += 1
+	return r
+}
 
 item_name :: proc(base: u8) -> string {
 	return ITEM_NAMES[base] if int(base) < len(ITEM_NAMES) else "?"

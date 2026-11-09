@@ -20,6 +20,7 @@ COLOR_ACCENT :: rl.Color{255, 209, 102, 255}
 COLOR_SCHOOL :: rl.Color{125, 249, 255, 255}
 COLOR_SHOT :: rl.Color{255, 150, 70, 255}
 COLOR_BAG :: rl.Color{214, 160, 96, 255}
+COLOR_MERMAID :: rl.Color{255, 159, 243, 255}
 
 PLAYER_COLORS := [6]rl.Color {
 	{255, 107, 107, 255},
@@ -176,7 +177,9 @@ draw_terrain :: proc(v: View, layer: Layer) {
 		}
 	}
 	if layer == .Islands {
-		// NPCs do porto: lojista e estaleiro.
+		// NPCs do porto: mecânico (atrás), mercenário, lojista e estaleiro.
+		if sx, sy, ok := in_view(v, DOCK_X, DOCK_Y - 2); ok do glyph(sx, sy, 'C', COLOR_ACCENT)
+		if sx, sy, ok := in_view(v, DOCK_X - 2, DOCK_Y - 1); ok do glyph(sx, sy, 'M', COLOR_ACCENT)
 		if sx, sy, ok := in_view(v, DOCK_X, DOCK_Y - 1); ok do glyph(sx, sy, 'L', COLOR_ACCENT)
 		if sx, sy, ok := in_view(v, DOCK_X + 2, DOCK_Y - 1); ok do glyph(sx, sy, 'E', COLOR_ACCENT)
 	}
@@ -197,15 +200,19 @@ draw_schools :: proc(v: View) {
 			}
 		}
 	}
-	// Bags ($) e coroas (W) boiando, piscando para chamar atenção.
+	// Bags ($) e coroas (W) boiando, piscando para chamar atenção, e a sereia (S) na pedra dela.
 	for m in s.marks[:s.mark_count] {
-		if m.kind != MARK_BAG && m.kind != MARK_CROWN do continue
+		if m.kind == MARK_SCHOOL do continue
 		sx, sy := in_view(v, m.x, m.y) or_continue
 		bright := u8(180 + 75 * math.sin(rl.GetTime() * 5))
-		if m.kind == MARK_BAG {
+		switch m.kind {
+		case MARK_BAG:
 			glyph(sx, sy, '$', {COLOR_BAG.r, COLOR_BAG.g, COLOR_BAG.b, bright})
-		} else {
+		case MARK_CROWN:
 			glyph(sx, sy, 'W', {COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, bright})
+		case MARK_MERMAID:
+			glyph(sx, sy, 'S', COLOR_MERMAID)
+			draw_label(v, m.x, m.y - 1, "Sereia", COLOR_MERMAID)
 		}
 	}
 }
@@ -285,7 +292,7 @@ draw_effects :: proc(v: View) {
 		text(p.text, x, y, 20, {p.color.r, p.color.g, p.color.b, alpha})
 	}
 	// Mira: um + embaixo do mouse, vermelho quando o alvo está no alcance.
-	if wp, _, armed := equipped_weapon(); armed && !s.inv_open && !s.shop_open && !s.yard_open {
+	if wp, _, armed := equipped_weapon(); armed && !menu_open() {
 		if mx, my, ok := mouse_cell(); ok {
 			dx, dy := mx - s.x, my - s.y
 			in_range := dx * dx + dy * dy <= i32(wp.range * wp.range)

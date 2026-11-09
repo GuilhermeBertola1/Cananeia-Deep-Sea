@@ -47,6 +47,9 @@ typedef enum {
 
 #define AFFIX_NONE 0xFF
 #define MAX_AFFIXES 3
+// Encanto da sereia: cada nível soma 25% (no mínimo +1) em cada stat do item.
+#define ENCHANT_MAX 3
+#define ENCHANT_PCT 25
 
 typedef struct {
     uint32_t seed;
@@ -78,3 +81,6 @@ extern const affix_t AFFIXES[AFFIX_COUNT];
 
 item_t item_new(uint8_t base, uint32_t seed);
 item_info_t item_info(item_t item);
+// O mesmo item_info, com o encanto por cima. O encanto não está na semente:
+// fica guardado no perfil, ao lado do item (profile_t.enchant).
+item_info_t item_info_enchanted(item_t item, uint8_t level);

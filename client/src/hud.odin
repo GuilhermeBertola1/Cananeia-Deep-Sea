@@ -52,6 +52,7 @@ draw_map_at :: proc(x, y, size: f32) {
 		case MARK_SCHOOL: dot(x, y, k, m.x, m.y, max(1, k), COLOR_SCHOOL)
 		case MARK_BAG: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_BAG)
 		case MARK_CROWN: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_ACCENT)
+		case MARK_MERMAID: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_MERMAID)
 		}
 	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
@@ -123,6 +124,10 @@ draw_hud :: proc() {
 		text("Sem arma: equipe uma no inventário (I)", x, y, 10, COLOR_QUIET)
 	}
 	y += 16
+	if s.has_mission {
+		text(fmt.tprintf("Missão da sereia: afundar %s", mission_target()), x, y, 10, COLOR_MERMAID)
+		y += 14
+	}
 
 	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
@@ -136,19 +141,22 @@ draw_hud :: proc() {
 	text("RANKING", x, y, 20, COLOR_QUIET)
 	y += 24
 	for e, i in s.rank[:s.rank_count] {
-		if y > sh - 40 do break
+		if y > sh - 54 do break
 		color := COLOR_ACCENT if e.name == s.players[s.my_id].name else (COLOR_INK if e.online else COLOR_QUIET)
 		text(fmt.tprintf("%d. %s", i + 1, e.name), x, y, 20, color)
 		m := money_text(e.money)
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
+	text("B mercenário  C mecânico  E sereia (S, no mar)", x, sh - 46, 10, COLOR_QUIET)
 	text("Clique ou Espaço atira na mira (+)", x, sh - 32, 10, COLOR_QUIET)
 	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
-	if s.at_dock && !s.shop_open && !s.yard_open {
-		tip := "Você está no cais. E: lojista (L)   U: estaleiro (E)"
+	tip := ""
+	if s.at_dock do tip = "No cais. E: lojista (L)  U: estaleiro (E)  B: mercenário (M)  C: mecânico (C)"
+	if s.at_mermaid do tip = "A sereia (S) está ouvindo. E: falar com ela"
+	if tip != "" && !menu_open() {
 		w := text_width(tip, 20)
 		tx := (px - w) / 2
 		rl.DrawRectangleV({tx - 10, 8}, {w + 20, 30}, {0, 0, 0, 170})
@@ -263,6 +271,157 @@ draw_shipyard :: proc() {
 	text("Número compra o próximo nível.  U ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
 }
 
+// --- mercenário -----------------------------------------------------------------
+
+draw_mercenary :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 680
+	h: f32 = 180 + LOOT_SLOTS * 26
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	cy := y + 16
+	text("MERCENÁRIO", cx, cy, 20, COLOR_ACCENT)
+	cy += 26
+	text("\"Bag dos outros? Eu fico com ela, os peixes ficam com você.\"", cx, cy, 20, COLOR_QUIET)
+	cy += 40
+
+	// O que o barco carrega. A coroa do alvo da sereia ele não pega.
+	fish, crowns := 0, 0
+	for &l in s.loot {
+		switch l.kind {
+		case LOOT_BAG:
+			text(fmt.tprintf("$ Bag de %s", loot_owner(&l)), cx, cy, 20, COLOR_BAG)
+			n := fmt.tprintf("%d peixes", l.fish)
+			text(n, x + w - 20 - text_width(n, 20), cy, 20, COLOR_INK)
+			fish += l.fish
+		case LOOT_CROWN:
+			if s.has_mission && loot_owner(&l) == mission_target() {
+				text(fmt.tprintf("W Coroa de %s (essa é da sereia)", loot_owner(&l)), cx, cy, 20, COLOR_MERMAID)
+			} else {
+				text(fmt.tprintf("W Coroa de %s", loot_owner(&l)), cx, cy, 20, COLOR_ACCENT)
+				bounty := money_text(CROWN_BOUNTY_CENTS)
+				text(bounty, x + w - 20 - text_width(bounty, 20), cy, 20, COLOR_INK)
+				crowns += 1
+			}
+		case:
+			continue
+		}
+		cy += 26
+	}
+	if fish == 0 && crowns == 0 do text("Nada para entregar. Afunde alguém e pegue a bag!", cx, cy, 20, COLOR_QUIET)
+
+	// Os peixes vão para o porão: só cabe o que tem de espaço.
+	room := max(s.capacity - hold_count(), 0)
+	cy = y + h - 64
+	deal := fmt.tprintf("[T] Entregar: %d peixe(s) para o porão e %s", min(fish, room), money_text(u32(crowns) * CROWN_BOUNTY_CENTS))
+	text(deal, cx, cy, 20, COLOR_ACCENT if fish > 0 || crowns > 0 else COLOR_QUIET)
+	cy += 30
+	text("T entrega.  B ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
+}
+
+// --- sereia -------------------------------------------------------------------------
+
+draw_mermaid :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 700
+	h: f32 = 260
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_MERMAID)
+
+	cx := x + 20
+	cy := y + 16
+	text("SEREIA", cx, cy, 20, COLOR_MERMAID)
+	cy += 26
+	if !s.has_mission {
+		text("\"Gire a roleta, marujo. A sorte é do mar...\"", cx, cy, 20, COLOR_QUIET)
+		cy += 40
+		text("40%  ela rouba 10% do seu dinheiro (no máximo $100)", cx, cy, 20, COLOR_INK)
+		cy += 26
+		text("45%  missão: afundar um capitão e trazer a coroa dele", cx, cy, 20, COLOR_INK)
+		cy += 26
+		text("15%  ela só canta", cx, cy, 20, COLOR_INK)
+		cy += 40
+		text("[G] Girar a roleta (uma vez por minuto)", cx, cy, 20, COLOR_MERMAID)
+	} else {
+		target := mission_target()
+		text(fmt.tprintf("\"Afunde %s e me traga a coroa. Eu encanto um item seu.\"", target), cx, cy, 20, COLOR_QUIET)
+		cy += 40
+		has_crown := false
+		for &l in s.loot {
+			if l.kind == LOOT_CROWN && loot_owner(&l) == target do has_crown = true
+		}
+		if has_crown {
+			text(fmt.tprintf("[G] Entregar a coroa de %s", target), cx, cy, 20, COLOR_MERMAID)
+			cy += 26
+			text("Ela encanta um item aleatório da bolsa (até +3).", cx, cy, 20, COLOR_QUIET)
+		} else {
+			text(fmt.tprintf("Você ainda não tem a coroa de %s.", target), cx, cy, 20, COLOR_INK)
+			cy += 26
+			text("Afunde o barco e passe por cima da coroa (W) no mar.", cx, cy, 20, COLOR_QUIET)
+		}
+		cy += 40
+		text("[X] Desistir da missão", cx, cy, 20, COLOR_QUIET)
+	}
+	text("E ou Esc fecha.", cx, y + h - 30, 20, COLOR_QUIET)
+}
+
+// --- mecânico ------------------------------------------------------------------
+
+draw_mechanic :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 640
+	h: f32 = 170 + BAG_SIZE * 26
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ACCENT)
+
+	cx := x + 20
+	cy := y + 16
+	text("MECÂNICO", cx, cy, 20, COLOR_ACCENT)
+	cy += 26
+	text("\"Dois iguais viram um melhor. Pode confiar.\"", cx, cy, 20, COLOR_QUIET)
+	cy += 36
+
+	// A bolsa. > = o primeiro item escolhido.
+	for it, i in s.bag {
+		if i == s.mech_cursor do rl.DrawRectangleV({cx - 8, cy - 3}, {w - 24, 26}, {255, 255, 255, 28})
+		if it.base == ITEM_NONE {
+			text(fmt.tprintf("%2d   -", i + 1), cx, cy, 20, COLOR_QUIET)
+		} else {
+			mark := ">" if s.mech_first == i + 1 else " "
+			ench := fmt.tprintf(" +%d", it.enchant) if it.enchant > 0 else ""
+			text(fmt.tprintf("%2d %s %s%s (%s)", i + 1, mark, item_name(it.base), ench, rarity_name(it.rarity)), cx, cy, 20, rarity_color(it.rarity))
+		}
+		cy += 26
+	}
+
+	// O que sai se juntar o marcado com o que está no cursor.
+	cy += 8
+	if s.mech_first == 0 {
+		text("Enter marca o primeiro item.", cx, cy, 20, COLOR_INK)
+	} else {
+		a, b := s.bag[s.mech_first - 1], s.bag[s.mech_cursor]
+		if s.mech_first == s.mech_cursor + 1 || b.base == ITEM_NONE {
+			text(fmt.tprintf("Escolha outro %s para juntar.", item_name(a.base)), cx, cy, 20, COLOR_INK)
+		} else if a.base != b.base {
+			text("Os dois precisam ser do mesmo tipo.", cx, cy, 20, {255, 140, 120, 255})
+		} else {
+			r := combine_rarity(a, b)
+			price := COMBINE_PRICE[r]
+			color := COLOR_ACCENT if s.money >= price else COLOR_QUIET
+			text(fmt.tprintf("[Enter] Juntar: sai %s ou melhor, por %s", rarity_name(r), money_text(price)), cx, cy, 20, color)
+		}
+	}
+	text("W/S escolhe  Enter marca/junta  C ou Esc fecha", cx, y + h - 30, 20, COLOR_QUIET)
+}
+
 // --- inventário -----------------------------------------------------------------
 
 draw_inventory :: proc() {
@@ -286,7 +445,8 @@ draw_inventory :: proc() {
 			text(fmt.tprintf("%2d   -", i + 1), cx, row_y, 20, COLOR_QUIET)
 		} else {
 			mark := "*" if it.equipped != 0 else " "
-			text(fmt.tprintf("%2d %s %s", i + 1, mark, item_name(it.base)), cx, row_y, 20, rarity_color(it.rarity))
+			ench := fmt.tprintf(" +%d", it.enchant) if it.enchant > 0 else ""
+			text(fmt.tprintf("%2d %s %s%s", i + 1, mark, item_name(it.base), ench), cx, row_y, 20, rarity_color(it.rarity))
 			if it.equipped != 0 {
 				slot := EQUIP_NAMES[it.equipped] if int(it.equipped) < len(EQUIP_NAMES) else "?"
 				text(slot, cx + list_w - 20 - text_width(slot, 20), row_y, 20, COLOR_ACCENT)
@@ -305,7 +465,10 @@ draw_inventory :: proc() {
 	for &l in s.loot {
 		switch l.kind {
 		case LOOT_BAG: text(fmt.tprintf("$ Bag de %s (%d peixes)", loot_owner(&l), l.fish), cx, row_y, 20, COLOR_BAG)
-		case LOOT_CROWN: text(fmt.tprintf("W Coroa de %s", loot_owner(&l)), cx, row_y, 20, COLOR_ACCENT)
+		case LOOT_CROWN:
+			// A coroa que a sereia pediu fica rosa.
+			mission := s.has_mission && loot_owner(&l) == mission_target()
+			text(fmt.tprintf("W Coroa de %s", loot_owner(&l)), cx, row_y, 20, COLOR_MERMAID if mission else COLOR_ACCENT)
 		case: continue
 		}
 		empty = false
@@ -323,6 +486,10 @@ draw_inventory :: proc() {
 		text(item_name(sel.base), dx, dy, 20, rarity_color(sel.rarity))
 		dy += 24
 		text(rarity_name(sel.rarity), dx, dy, 20, rarity_color(sel.rarity))
+		if sel.enchant > 0 {
+			dy += 24
+			text(fmt.tprintf("Encanto da sereia +%d", sel.enchant), dx, dy, 20, COLOR_MERMAID)
+		}
 		dy += 32
 		for v, st in sel.stats {
 			if v == 0 do continue

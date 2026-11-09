@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0 (2026-11-09): sereia, mercenário e mecânico
+
+- **Mercenário** no cais (NPC `M`, tecla B): fica com as bags dos outros e passa os peixes delas para o seu porão, até encher. Paga $25 por coroa, menos pela coroa que a sereia pediu
+- **Sereia** numa pedra em mar aberto (`S`, a 70–110 células do porto, sempre no mesmo lugar para o mesmo mapa; zona segura em volta). Tecla E perto dela: roleta uma vez por minuto que pode roubar 10% do dinheiro (no máximo $100), dar a missão "derrote o jogador X" ou só cantar. O alvo fica sabendo que está sendo caçado
+- Levar a coroa do alvo para a sereia **encanta** um item aleatório da bolsa: até +3, cada nível dá +25% (no mínimo +1) nos stats do item
+- **Mecânico** no porto (NPC `C`, tecla C): junta dois itens do mesmo tipo num só, sorteado de novo pelo gerador. Sai no mínimo com a raridade do melhor; com raridades iguais, uma acima. O encanto maior fica. $80 a $600
+- Tela: janelas do mercenário, da sereia e do mecânico, a sereia no mar e no minimapa, missão no painel e `+N` nos itens encantados
+- Protocolo versão 6: `C_MERC`, `C_MERMAID`, `C_COMBINE`, eventos 20 a 32, flag "perto da sereia" no `S_STATE`, encanto e missão no `S_INVENTORY`, sereia no `S_MARKS`
+- Perfis da v0.5 são convertidos sem perder nada (encantos e missão no fim do `profile_t`)
+
 ## v0.5.0 (2026-11-09): armas, PvP, morte e drops
 
 - Tiro com a arma equipada: mire com o mouse e clique (ou Espaço); segurando, atira de novo quando a recarga acaba. O servidor cria o tiro e decide quem acertou
