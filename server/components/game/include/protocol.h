@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 4
+#define PROTOCOL_VERSION 5
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -20,6 +20,7 @@ enum {
     C_DISCARD = 0x05,
     C_UPGRADE = 0x06,
     C_REPAIR = 0x07,
+    C_FIRE = 0x08,
 };
 
 // Servidor -> cliente
@@ -38,9 +39,11 @@ enum {
 
 enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4, ERR_BAD_PASSWORD = 5, ERR_WRONG_PASSWORD = 6 };
 enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_WELCOME = 5, EV_ITEM = 6, EV_BAG_FULL = 7,
-       EV_CRASH = 8, EV_BROKEN = 9, EV_UPGRADED = 10, EV_REPAIRED = 11, EV_NO_MONEY = 12 };
-enum { MARK_SCHOOL = 1 };
-enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1 };
+       EV_CRASH = 8, EV_BROKEN = 9, EV_UPGRADED = 10, EV_REPAIRED = 11, EV_NO_MONEY = 12,
+       EV_HIT = 13, EV_HURT = 14, EV_SAFE_ZONE = 15,
+       EV_KILL = 16, EV_DIED = 17, EV_LOOT = 18, EV_LOOT_FULL = 19 };
+enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3 };
+enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.
 typedef struct {

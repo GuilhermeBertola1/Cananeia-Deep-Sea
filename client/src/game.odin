@@ -10,6 +10,9 @@ import rl "vendor:raylib"
 MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
+MAX_SHOTS :: 32
+MAX_MARKS :: 102 // cardumes (70) + bags e coroas (32)
+LOOT_SLOTS :: 4
 LOG_SIZE :: 6
 
 Screen :: enum {
@@ -30,9 +33,22 @@ Player_Info :: struct {
 }
 
 Boat :: struct {
-	id:   u8,
-	x, y: i32,
-	look: u8,
+	id:     u8,
+	x, y:   i32,
+	look:   u8,
+	hp_pct: u8, // vida em %, para a barrinha em cima do barco
+}
+
+Loot :: struct {
+	kind:      u8, // LOOT_NONE, LOOT_BAG ou LOOT_CROWN
+	fish:      int,
+	owner_buf: [NAME_MAX_LEN]u8,
+	owner_len: int,
+}
+
+// Nome de quem morreu e deixou o saque.
+loot_owner :: proc(l: ^Loot) -> string {
+	return string(l.owner_buf[:l.owner_len])
 }
 
 School :: struct {
@@ -94,6 +110,10 @@ State :: struct {
 	at_dock:       bool,
 	hp, hp_max:    int,
 	broken:        bool,
+	safe:          bool, // zona segura: ninguém atira nem toma tiro
+	reload:        int,  // ticks até poder atirar de novo
+	kills, deaths: int,
+	loot:          [LOOT_SLOTS]Loot,
 	boat_level:    [PART_COUNT]int,
 	hold:          [FISH_COUNT]int,
 	bag:           [BAG_SIZE]Item,
@@ -102,6 +122,7 @@ State :: struct {
 	tick:          u32,
 	input_dx:      i8,
 	input_dy:      i8,
+	fire_tick:     u32, // tick do último tiro mandado, para não mandar dois no mesmo
 	offline_move:  f32,
 
 	// o que o servidor mostra
@@ -110,7 +131,9 @@ State :: struct {
 	boat_count:    int,
 	schools:       [MAX_SCHOOLS]School,
 	school_count:  int,
-	marks:         [MAX_SCHOOLS]Mark,
+	shots:         [MAX_SHOTS][2]i32,
+	shot_count:    int,
+	marks:         [MAX_MARKS]Mark,
 	mark_count:    int,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
@@ -255,6 +278,24 @@ update_playing :: proc() {
 	}
 	if s.offline do offline_move(dx, dy)
 
+	// Tiro: clique (ou Espaço) atira na célula do mouse. Segurando, atira de
+	// novo assim que a recarga acaba. Quem confere tudo é o servidor.
+	if !s.shop_open && !s.inv_open && !s.yard_open && !s.big_map && !s.offline {
+		pressed := rl.IsMouseButtonPressed(.LEFT) || rl.IsKeyPressed(.SPACE)
+		held := rl.IsMouseButtonDown(.LEFT) || rl.IsKeyDown(.SPACE)
+		_, _, armed := equipped_weapon()
+		if pressed && !armed {
+			add_log("Sem arma! Equipe um arpão, mosquete ou canhão no inventário (I).")
+		} else if pressed && s.safe {
+			add_log("Zona segura: perto do porto ninguém atira.")
+		} else if held && armed && !s.safe && s.reload == 0 && s.tick != s.fire_tick {
+			if mx, my, ok := mouse_cell(); ok {
+				send_fire(mx, my)
+				s.fire_tick = s.tick
+			}
+		}
+	}
+
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
 	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open {
@@ -375,6 +416,10 @@ money_text :: proc(cents: u32) -> string {
 	return fmt.tprintf("$%d,%02d", cents / 100, cents % 100)
 }
 
+player_name :: proc(id: int) -> string {
+	return s.players[id].name if id >= 0 && id < MAX_PLAYERS else "Alguém"
+}
+
 hold_count :: proc() -> int {
 	n := 0
 	for h in s.hold do n += h
@@ -486,6 +531,29 @@ on_net_message :: proc(data: []u8) {
 			add_log("Estaleiro: consertou %d de vida por %s.", count, money_text(value))
 		case EV_NO_MONEY:
 			add_log("Estaleiro: \"Isso custa %s, marujo. Volte com o dinheiro.\"", money_text(value))
+		case EV_HIT:
+			// Nos tiros, `species` é o id do outro jogador.
+			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
+		case EV_HURT:
+			add_popup({255, 107, 107, 255}, "-%d vida", count)
+			add_log("%s te acertou! -%d de vida, sobrou %d.", player_name(species), count, value)
+		case EV_SAFE_ZONE:
+			add_log("Zona segura: perto do porto ninguém atira.")
+		case EV_KILL:
+			add_popup(COLOR_ACCENT, "Afundou %s!", player_name(species))
+			add_log("Você afundou %s! A bag e a coroa ficaram boiando.", player_name(species))
+		case EV_DIED:
+			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", player_name(species), count)
+		case EV_LOOT:
+			what := "bag" if species == LOOT_BAG else "coroa"
+			if count == 1 {
+				add_log("Recuperou sua %s!", what)
+			} else {
+				add_popup(COLOR_ACCENT, "+%s", what)
+				add_log("Pegou uma %s! Veja no inventário (I).", what)
+			}
+		case EV_LOOT_FULL:
+			add_log("O barco já carrega %d saques: não cabe mais nenhum.", LOOT_SLOTS)
 		}
 
 
@@ -504,7 +572,7 @@ on_net_message :: proc(data: []u8) {
 	case S_MARKS:
 		n := int(read_u8(&r))
 		s.mark_count = 0
-		for _ in 0 ..< min(n, MAX_SCHOOLS) {
+		for _ in 0 ..< min(n, MAX_MARKS) {
 			m := Mark{x = i32(read_u16(&r)), y = i32(read_u16(&r)), kind = read_u8(&r), species = read_u8(&r)}
 			if !r.ok do break
 			s.marks[s.mark_count] = m
@@ -527,8 +595,19 @@ on_net_message :: proc(data: []u8) {
 		}
 		stats: [STAT_COUNT]int
 		for &v in stats do v = int(read_i16(&r))
+		kills, deaths := int(read_u16(&r)), int(read_u16(&r))
+		loot: [LOOT_SLOTS]Loot
+		n = int(read_u8(&r))
+		for i in 0 ..< n {
+			kind, fish := read_u8(&r), int(read_u16(&r))
+			name_buf: [NAME_MAX_LEN]u8
+			owner := read_name(&r, name_buf[:])
+			if i < LOOT_SLOTS do loot[i] = Loot{kind = kind, fish = fish, owner_buf = name_buf, owner_len = len(owner)}
+		}
 		if !r.ok do return
 		s.bag, s.stats = bag, stats
+		s.kills, s.deaths = kills, deaths
+		s.loot = loot
 
 	case S_BOAT:
 		levels: [PART_COUNT]int
@@ -553,15 +632,17 @@ read_state :: proc(r: ^Reader) {
 	flags := read_u8(r)
 	s.at_dock = flags & STATE_AT_DOCK != 0
 	s.broken = flags & STATE_BROKEN != 0
+	s.safe = flags & STATE_SAFE != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
+	s.reload = int(read_u8(r))
 	for &h in s.hold do h = int(read_u16(r))
 	s.online = int(read_u8(r))
 
 	n := int(read_u8(r))
 	s.boat_count = 0
 	for _ in 0 ..< min(n, MAX_PLAYERS) {
-		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), look = read_u8(r)}
+		b := Boat{id = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), look = read_u8(r), hp_pct = read_u8(r)}
 		if !r.ok || b.id >= MAX_PLAYERS do break
 		s.boats[s.boat_count] = b
 		s.boat_count += 1
@@ -574,5 +655,14 @@ read_state :: proc(r: ^Reader) {
 		if !r.ok do break
 		s.schools[s.school_count] = sc
 		s.school_count += 1
+	}
+
+	n = int(read_u8(r))
+	s.shot_count = 0
+	for _ in 0 ..< min(n, MAX_SHOTS) {
+		shot := [2]i32{i32(read_u16(r)), i32(read_u16(r))}
+		if !r.ok do break
+		s.shots[s.shot_count] = shot
+		s.shot_count += 1
 	}
 }

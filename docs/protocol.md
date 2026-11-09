@@ -28,6 +28,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x05` | `C_DISCARD` | `u8` índice na bolsa. Joga o item fora (desequipa antes) |
 | `0x06` | `C_UPGRADE` | `u8` peça (0 vela, 1 casco, 2 leme). Compra o próximo nível no estaleiro. Só no cais |
 | `0x07` | `C_REPAIR` | Conserta o barco inteiro no estaleiro. Só no cais |
+| `0x08` | `C_FIRE` | `u16` x, `u16` y: célula do mundo para onde atirar. Precisa de arma equipada, recarga zerada e estar fora da zona segura |
 
 ## Servidor → cliente
 
@@ -39,7 +40,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x84` | `S_PLAYER` | quando alguém entra | `u8` id, `u8` cor, `nome` |
 | `0x85` | `S_EVENT` | pesca, venda... | `u8` tipo, `u8` espécie, `u16` quantidade, `u32` valor |
 | `0x86` | `S_RANK` | a cada 5 s e após vendas | `u8` n, n × (`u32` dinheiro, `u8` online, `nome`) |
-| `0x87` | `S_MARKS` | a cada 1 s | `u8` n, n × (`u16` x, `u16` y, `u8` tipo, `u8` extra) — pontos do minimapa |
+| `0x87` | `S_MARKS` | a cada 1 s e quando um saque cai ou some | `u8` n, n × (`u16` x, `u16` y, `u8` tipo, `u8` extra) — pontos do minimapa |
 | `0x88` | `S_PRICES` | a cada 1 s e após vendas | `u16` preço em centavos de cada espécie (9) |
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
 | `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
@@ -53,13 +54,16 @@ u32 dinheiro
 u16 capacidade do porão
 u8  velocidade máxima (células/s)
 u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
-u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0)
+u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
+                        bit 2 = zona segura
 u16 vida, u16 vida máxima
+u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
 u8  jogadores online
-u8  n, n × (u8 id, u16 x, u16 y, u8 visual)      outros barcos a até 50 células;
+u8  n, n × (u8 id, u16 x, u16 y, u8 visual, u8 vida%)   outros barcos a até 50 células;
                         visual = nível do casco × 16 + nível da vela
 u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
+u8  n, n × (u16 x, u16 y)                        tiros voando a até 50 células
 ```
 
 ### Eventos (`S_EVENT`)
@@ -78,6 +82,13 @@ u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
 | 10 | comprou upgrade: `espécie` = peça, `quantidade` = nível novo, `valor` = preço |
 | 11 | consertou: `quantidade` = vida recuperada, `valor` = preço |
 | 12 | dinheiro não dá: `valor` = preço |
+| 13 | seu tiro acertou: `espécie` = id do alvo, `quantidade` = dano, `valor` = vida que sobrou nele |
+| 14 | você tomou um tiro: `espécie` = id de quem atirou, `quantidade` = dano, `valor` = vida que sobrou |
+| 15 | não dá para atirar na zona segura |
+| 16 | você afundou alguém: `espécie` = id do alvo |
+| 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu), `quantidade` = peixes que ficaram na bag |
+| 18 | pegou um saque: `espécie` = tipo (1 bag, 2 coroa), `quantidade` = 1 se era seu |
+| 19 | achou um saque, mas o barco já carrega 4 |
 
 ### `S_INVENTORY`
 
@@ -90,6 +101,9 @@ n × item (16 bytes):
     u8  afixos[3]       0xFF = sem afixo
     i16 stats[5]        velocidade, vida, dano, produção, sorte
 i16 stats[5]            total do barco (base + equipados)
+u16 abates, u16 mortes
+u8  n                   saques que o barco carrega (4)
+n × (u8 tipo, u16 peixes, nome do dono)          tipo 0 = vazio, 1 bag, 2 coroa
 ```
 
 O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixos e números saem da semente (`server/components/game/items.c`). O servidor manda o item já pronto, então o cliente não roda o gerador.
@@ -135,11 +149,30 @@ Bater na costa a 4 células/s ou mais tira 2 de vida por célula/s (o cais não 
 
 A tabela está em `server/components/game/boat.c` e, para a tela do estaleiro, em `client/src/boat.odin`.
 
+### Armas, PvP e morte
+
+O cliente só diz para onde quer atirar (`C_FIRE`); o servidor cria o tiro, anda com ele uma célula por vez e decide quem acertou. O dano é o stat de dano do item (a raridade e o afixo Afiado contam).
+
+| Arma | Alcance | Recarga | Velocidade do tiro |
+| --- | --- | --- | --- |
+| Arpão | 8 células | 0,6 s | 2 células/tick |
+| Mosquete | 14 células | 1,2 s | 3 células/tick |
+| Canhão leve | 18 células | 2,0 s | 2 células/tick |
+
+A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/src/weapon.odin`.
+
+- O tiro acerta um barco na mesma linha, a até 1 célula para o lado. Some ao acertar, ao bater na terra ou no fim do alcance.
+- **Zona segura**: a até 21 células do centro do porto ninguém atira e tiro não tira vida.
+- **Vida 0 por tiro = morte** (bater na costa continua sendo só avaria; um barco avariado afunda com qualquer tiro). Quem morre deixa no mar uma **bag** com os peixes do porão e uma **coroa**, perde o saque que carregava e renasce perto do porto com o barco inteiro.
+- Passar por cima de uma bag ou coroa pega o saque. A sua volta para você (os peixes voltam ao porão); a dos outros fica no barco, até 4. Na v0.6 o mercenário e a sereia dão uso para elas. Saque no mar some em 5 minutos.
+
 ### Marcas do minimapa (`S_MARKS`)
 
 | Tipo | Extra |
 | --- | --- |
 | 1 cardume | espécie |
+| 2 bag | 0 |
+| 3 coroa | 0 |
 
 Bosses, NPCs e missões entram aqui como tipos novos.
 
