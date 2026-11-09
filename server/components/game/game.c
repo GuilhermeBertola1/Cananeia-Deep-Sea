@@ -34,6 +34,14 @@
 #define SPIN_COOLDOWN (60 * TICK_HZ) // uma volta na roleta por minuto
 #define STEAL_PCT 10
 #define STEAL_MAX_CENTS 10000 // ela rouba 10% do dinheiro, no máximo $100
+// Vilas de pescadores na costa de outras ilhas: vendem e consertam, e cada
+// uma paga mais por uma espécie.
+#define VILLAGE_COUNT 3
+#define VILLAGE_MIN_DIST 60   // do porto
+#define VILLAGE_MAX_DIST 200
+#define VILLAGE_SPACING 50    // de outra vila ou da sereia
+#define VILLAGE_SAFE_R 10
+#define VILLAGE_BONUS_PCT 25  // a mais pela espécie preferida
 
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
@@ -106,7 +114,13 @@ typedef struct {
     int16_t x, y, r;
 } safe_zone_t;
 
-enum { ZONE_PORT = 0, ZONE_MERMAID, SAFE_ZONE_COUNT };
+enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
+
+// Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
+typedef struct {
+    int16_t x, y;
+    uint8_t fav; // espécie que ela paga mais caro
+} village_t;
 
 static struct {
     uint8_t *tiles;
@@ -120,6 +134,8 @@ static struct {
     uint32_t pressure[FISH_COUNT];
     safe_zone_t safe_zones[SAFE_ZONE_COUNT];
     uint8_t stock[REGIONS_X * REGIONS_Y]; // peixes em cada região (0 a STOCK_MAX)
+    village_t villages[VILLAGE_COUNT];
+    int village_count; // quantas couberam no mapa (normalmente todas)
 } g;
 
 static uint8_t out[1024];
@@ -178,11 +194,25 @@ static int at_dock(const player_t *p) {
 static int in_safe_zone(int x, int y) {
     for (int i = 0; i < SAFE_ZONE_COUNT; i++) {
         const safe_zone_t *z = &g.safe_zones[i];
+        if (z->r <= 0) continue; // vila que não coube no mapa
         int dx = x - z->x, dy = y - z->y;
         if (dx * dx + dy * dy <= z->r * z->r) return 1;
     }
     return 0;
 }
+
+// Índice da vila em cujo cais o barco está, ou -1.
+static int at_village(const player_t *p) {
+    for (int i = 0; i < g.village_count; i++) {
+        const village_t *v = &g.villages[i];
+        if (p->x >= v->x - 1 && p->x <= v->x + 1 && p->y >= v->y - 1 && p->y <= v->y + 1) return i;
+    }
+    return -1;
+}
+
+// Lojista e reparo: no porto ou em qualquer vila. O resto (estaleiro,
+// mercenário, mecânico) continua só no porto.
+static int at_shop(const player_t *p) { return at_dock(p) || at_village(p) >= 0; }
 
 static int near_mermaid(const player_t *p) {
     const safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
@@ -296,6 +326,13 @@ static void send_marks(int slot) {
     put_u8(&w, MARK_MERMAID);
     put_u8(&w, 0);
     n++;
+    for (int i = 0; i < g.village_count; i++) {
+        put_u16(&w, (uint16_t)g.villages[i].x);
+        put_u16(&w, (uint16_t)g.villages[i].y);
+        put_u8(&w, MARK_VILLAGE);
+        put_u8(&w, g.villages[i].fav);
+        n++;
+    }
     out[count_at] = n;
     slot < 0 ? send_all(&w) : send_w(slot, &w);
 }
@@ -573,14 +610,18 @@ static void add_fish(int slot, uint8_t species, int n) {
 
 static void sell(int slot, uint8_t species) {
     player_t *p = &g.players[slot];
-    if (!at_dock(p)) return;
+    if (!at_shop(p)) return;
     profile_t *pr = prof(p);
+    int v = at_village(p);
+    uint8_t fav = v >= 0 ? g.villages[v].fav : FISH_NONE;
     uint32_t total = 0, count = 0;
     for (int i = 0; i < FISH_COUNT; i++) {
         if (species != FISH_NONE && species != i) continue;
         uint32_t n = pr->hold[i];
         if (!n) continue;
-        total += price_cents(i) * n;
+        uint32_t price = price_cents(i);
+        if (i == fav) price = price * (100 + VILLAGE_BONUS_PCT) / 100;
+        total += price * n;
         g.pressure[i] += n * 1000;
         count += n;
         pr->hold[i] = 0;
@@ -632,7 +673,7 @@ static void upgrade(int slot, uint8_t part) {
 static void repair(int slot) {
     player_t *p = &g.players[slot];
     profile_t *pr = prof(p);
-    if (!at_dock(p)) return;
+    if (!at_shop(p)) return;
     int missing = hp_max(p) - hp(p);
     if (missing <= 0) return;
     uint32_t price = (uint32_t)missing * REPAIR_CENTS_PER_HP;
@@ -821,7 +862,7 @@ static int try_move(player_t *p) {
 
 static void crash(int slot) {
     player_t *p = &g.players[slot];
-    int hit = p->vel >= CRASH_MIN_SPEED && !p->blocked && !at_dock(p);
+    int hit = p->vel >= CRASH_MIN_SPEED && !p->blocked && !at_shop(p);
     int dmg = p->vel * CRASH_DAMAGE;
     p->vel = 0;
     p->move_budget = 0;
@@ -1221,6 +1262,42 @@ static void place_mermaid(void) {
     }
 }
 
+static int far_from(int x, int y, int ox, int oy, int dist) {
+    int dx = x - ox, dy = y - oy;
+    return dx * dx + dy * dy >= dist * dist;
+}
+
+// Vilas: como a sereia, saem da semente do mapa, então ficam sempre no mesmo
+// lugar. O cais é uma célula de água com terra do lado (a costa de uma
+// ilha), e a água em volta deixa o barco encostar.
+static void place_villages(void) {
+    g.village_count = 0;
+    for (int i = 0; i < 20000 && g.village_count < VILLAGE_COUNT; i++) {
+        uint32_t h = world_hash(i, 0x7111A, g.seed);
+        int x = (int)(h % MAP_W), y = (int)((h >> 16) % MAP_H);
+        if (!tile_is_water(tile(x, y))) continue;
+        if (!far_from(x, y, PORT_X, PORT_Y, VILLAGE_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, VILLAGE_MAX_DIST + 1)) continue;
+        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
+        int ok = far_from(x, y, m->x, m->y, VILLAGE_SPACING);
+        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, VILLAGE_SPACING);
+        if (!ok) continue;
+        // Terra colada (a ilha) e pelo menos 5 das 8 vizinhas com água.
+        int land = 0, water = 0;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                if (!dx && !dy) continue;
+                tile_t t = tile(x + dx, y + dy);
+                land += t == TILE_SAND || t == TILE_GRASS;
+                water += tile_is_water(t);
+            }
+        if (!land || water < 5) continue;
+        village_t *v = &g.villages[g.village_count];
+        *v = (village_t){(int16_t)x, (int16_t)y, (uint8_t)((h >> 8) % FISH_COUNT)};
+        g.safe_zones[ZONE_VILLAGE + g.village_count] = (safe_zone_t){v->x, v->y, VILLAGE_SAFE_R};
+        g.village_count++;
+    }
+}
+
 // --- API --------------------------------------------------------------------
 
 void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn send) {
@@ -1233,6 +1310,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     g.checksum = world_checksum(tiles);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
     place_mermaid();
+    place_villages();
     memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
