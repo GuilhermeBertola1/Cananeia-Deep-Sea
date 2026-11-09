@@ -539,6 +539,13 @@ village_fav :: proc() -> (int, bool) {
 	return 0, false
 }
 
+// Quem atacou: um jogador, ou um bicho (KILLER_PREDATOR + tipo).
+attacker_name :: proc(id: int) -> string {
+	if id == KILLER_PREDATOR + PRED_SHARK do return "Um tubarão"
+	if id == KILLER_PREDATOR + PRED_GHOST do return "O navio fantasma"
+	return player_name(id)
+}
+
 player_name :: proc(id: int) -> string {
 	return s.players[id].name if id >= 0 && id < MAX_PLAYERS else "Alguém"
 }
@@ -660,14 +667,14 @@ on_net_message :: proc(data: []u8) {
 			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
 		case EV_HURT:
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
-			add_log("%s te acertou! -%d de vida, sobrou %d.", player_name(species), count, value)
+			add_log("%s te acertou! -%d de vida, sobrou %d.", attacker_name(species), count, value)
 		case EV_SAFE_ZONE:
 			add_log("Zona segura: perto do porto ninguém atira.")
 		case EV_KILL:
 			add_popup(COLOR_ACCENT, "Afundou %s!", player_name(species))
 			add_log("Você afundou %s! A bag e a coroa ficaram boiando.", player_name(species))
 		case EV_DIED:
-			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", player_name(species), count)
+			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", attacker_name(species), count)
 		case EV_LOOT:
 			what := "bag" if species == LOOT_BAG else "coroa"
 			if count == 1 {
@@ -721,6 +728,37 @@ on_net_message :: proc(data: []u8) {
 			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
 		case EV_CANT_COMBINE:
 			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
+		case EV_BITTEN:
+			add_popup({255, 107, 107, 255}, "-%d vida", count)
+			add_log("Um tubarão te mordeu! -%d de vida, sobrou %d. Fuja para o raso!", count, value)
+		case EV_PREDATOR_HIT:
+			what := "o navio fantasma" if species == PRED_GHOST else "o tubarão"
+			add_log("Acertou %s! -%d, sobrou %d de vida nele.", what, count, value)
+		case EV_PREDATOR_KILL:
+			add_popup(COLOR_ACCENT, "+%s", money_text(value))
+			if species == PRED_GHOST {
+				add_log("O navio fantasma afundou! Você deu %d de dano e ficou com %s e um baú.", count, money_text(value))
+			} else {
+				add_log("Afundou um tubarão! O porto paga %s pela barbatana.", money_text(value))
+			}
+		case EV_WORLD_START:
+			// `value` traz onde: x nos 16 bits de baixo, y nos de cima.
+			dir, dist := compass(i32(value & 0xFFFF), i32(value >> 16))
+			add_popup(world_color(u8(species)), "%s!", world_name(u8(species)))
+			switch species {
+			case WORLD_STORM:
+				add_log("Tempestade a %d células (%s)! Pesca em dobro, mas o vento empurra e o casco sofre.", dist, dir)
+			case WORLD_SQUID:
+				add_log("Maré de lulas a %d células (%s)! Lula-gigante por %d s.", dist, dir, count)
+			case WORLD_GHOST:
+				add_log("Navio fantasma a %d células (%s)! Juntem-se para afundá-lo.", dist, dir)
+			}
+		case EV_WORLD_END:
+			switch species {
+			case WORLD_STORM: add_log("A tempestade passou.")
+			case WORLD_SQUID: add_log("A maré de lulas acabou.")
+			case WORLD_GHOST: add_log("O navio fantasma se foi.")
+			}
 		}
 
 

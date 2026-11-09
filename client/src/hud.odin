@@ -56,6 +56,14 @@ draw_map_at :: proc(x, y, size: f32) {
 		case MARK_VILLAGE: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_VILLAGE)
 		}
 	}
+	// Evento do mundo: um círculo do tamanho da área. Bichos perto do barco: pontinhos.
+	if s.world.kind != WORLD_NONE {
+		center := rl.Vector2{x + f32(s.world.x) * k, y + f32(s.world.y) * k}
+		rl.DrawCircleLinesV(center, max(3, f32(s.world.radius) * k), world_color(s.world.kind))
+	}
+	for p in s.predators[:s.pred_count] {
+		dot(x, y, k, p.x, p.y, max(1, k), COLOR_GHOST if p.kind == PRED_GHOST else COLOR_SHARK)
+	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
 	for b in s.boats[:s.boat_count] {
 		dot(x, y, k, b.x, b.y, max(2, 1.5 * k), PLAYER_COLORS[s.players[b.id].color % len(PLAYER_COLORS)])
@@ -75,11 +83,34 @@ nearest_target :: proc() -> (string, bool) {
 	}
 	if best < 0 do return "", false
 	m := s.marks[best]
-	DIRS := [8]string{"L", "SE", "S", "SO", "O", "NO", "N", "NE"}
-	angle := math.atan2(f32(m.y - s.y), f32(m.x - s.x))
-	dir := DIRS[(int(math.round(angle / (math.PI / 4))) + 8) % 8]
-	dist := int(math.sqrt(f32(best_d2)))
+	dir, dist := compass(m.x, m.y)
 	return fmt.tprintf("Cardume de %s: %d %s", species_name(int(m.species)), dist, dir), true
+}
+
+// Para que lado e a quantas células fica (x, y), olhando do barco.
+compass :: proc(x, y: i32) -> (dir: string, dist: int) {
+	DIRS := [8]string{"L", "SE", "S", "SO", "O", "NO", "N", "NE"}
+	dx, dy := f32(x - s.x), f32(y - s.y)
+	angle := math.atan2(dy, dx)
+	return DIRS[(int(math.round(angle / (math.PI / 4))) + 8) % 8], int(math.sqrt(dx * dx + dy * dy))
+}
+
+world_name :: proc(kind: u8) -> string {
+	switch kind {
+	case WORLD_STORM: return "Tempestade"
+	case WORLD_SQUID: return "Maré de lulas"
+	case WORLD_GHOST: return "Navio fantasma"
+	}
+	return "?"
+}
+
+world_color :: proc(kind: u8) -> rl.Color {
+	switch kind {
+	case WORLD_STORM: return {170, 190, 225, 255}
+	case WORLD_SQUID: return SPECIES[8].color // lula-gigante
+	case WORLD_GHOST: return COLOR_GHOST
+	}
+	return COLOR_QUIET
 }
 
 // --- painel ------------------------------------------------------------------------
@@ -136,6 +167,15 @@ draw_hud :: proc() {
 		text(fmt.tprintf("Peixe na região: %d%%", s.stock_pct), x, y, 10, stock_color)
 		rl.DrawRectangleV({x + 130, y + 3}, {bar_w - 130, 6}, {40, 50, 66, 255})
 		rl.DrawRectangleV({x + 130, y + 3}, {(bar_w - 130) * stock, 6}, stock_color)
+		y += 14
+	}
+
+	// Evento do mundo: o que é, quanto tempo falta e onde fica.
+	if s.world.kind != WORLD_NONE {
+		dir, dist := compass(s.world.x, s.world.y)
+		place := "você está nela!" if dist <= int(s.world.radius) else fmt.tprintf("%d %s", dist, dir)
+		secs := s.world.secs
+		text(fmt.tprintf("%s (%d:%02d): %s", world_name(s.world.kind), secs / 60, secs % 60, place), x, y, 10, world_color(s.world.kind))
 		y += 14
 	}
 
