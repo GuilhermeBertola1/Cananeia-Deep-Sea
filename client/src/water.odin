@@ -40,6 +40,7 @@ uniform vec4 colDiffuse;
 uniform vec2 size;   // tamanho da textura, em px
 uniform vec2 offset; // canto superior esquerdo da tela, em px do mundo
 uniform float time;  // segundos
+uniform float sun;   // 1 de dia, 0 à noite: sem sol, sem reflexo
 
 void main() {
     // A textura de render vem de cabeça para baixo: y = 1 é o topo da tela.
@@ -60,7 +61,7 @@ void main() {
     float h = wave + 0.6 * sin((w.x - w.y) * 0.05 + time * 2.1) +
               0.4 * sin(w.x * 0.11 + w.y * 0.07 - time * 3.0);
     float glint = smoothstep(1.5, 1.85, h);
-    c.rgb += glint * vec3(0.35, 0.45, 0.55);
+    c.rgb += glint * sun * vec3(0.35, 0.45, 0.55);
 
     OUT_COLOR = c * colDiffuse * fragColor;
 }
@@ -73,6 +74,7 @@ Water :: struct {
 	size:   rl.ShaderLocationIndex,
 	offset: rl.ShaderLocationIndex,
 	time:   rl.ShaderLocationIndex,
+	sun:    rl.ShaderLocationIndex,
 }
 
 @(private = "file")
@@ -84,6 +86,7 @@ water_init :: proc() {
 	water.size = rl.ShaderLocationIndex(rl.GetShaderLocation(water.shader, "size"))
 	water.offset = rl.ShaderLocationIndex(rl.GetShaderLocation(water.shader, "offset"))
 	water.time = rl.ShaderLocationIndex(rl.GetShaderLocation(water.shader, "time"))
+	water.sun = rl.ShaderLocationIndex(rl.GetShaderLocation(water.shader, "sun"))
 }
 
 // Tudo o que for desenhado entre water_begin e water_end vai para a textura.
@@ -111,6 +114,8 @@ water_end :: proc(ox, oy: i32) {
 	rl.SetShaderValue(water.shader, water.size, &size, .VEC2)
 	rl.SetShaderValue(water.shader, water.offset, &offset, .VEC2)
 	rl.SetShaderValue(water.shader, water.time, &time, .FLOAT)
+	sun := 1 - night_amount()
+	rl.SetShaderValue(water.shader, water.sun, &sun, .FLOAT)
 	rl.BeginShaderMode(water.shader)
 	// Altura negativa: desvira a textura (o OpenGL guarda de baixo para cima).
 	rl.DrawTextureRec(tex, {0, 0, f32(tex.width), -f32(tex.height)}, {0, 0}, rl.WHITE)

@@ -85,6 +85,7 @@ render_init :: proc() {
 		glyph_w[cp] = w * scale
 	}
 	water_init()
+	light_init()
 }
 
 // Desenha um caractere centralizado na célula (sx, sy) da tela.
@@ -159,6 +160,7 @@ draw_world :: proc() {
 			draw_effects(v)
 		case .Sky:
 			draw_sky(v)
+			draw_night(v.ox, v.oy)
 		}
 	}
 }
@@ -406,13 +408,10 @@ draw_effects :: proc(v: View) {
 	}
 }
 
-// Céu: nuvens passando e um ciclo de dia e noite (10 minutos).
-// À noite, só o entorno do barco fica iluminado. Na tempestade, céu escuro,
-// chuva caindo com o vento e um relâmpago de vez em quando.
+// Céu: nuvens passando. Na tempestade, céu escuro, chuva caindo com o vento
+// e um relâmpago de vez em quando. A noite fica no light.odin.
 @(private = "file")
 draw_sky :: proc(v: View) {
-	day := math.sin(rl.GetTime() * math.TAU / 600)
-	night := f32(clamp(-day * 1.4, 0, 1)) // 0 de dia, 1 no meio da noite
 	drift := i32(rl.GetTime() * 2)
 	storm := s.world.kind == WORLD_STORM
 	flash := storm && hash2(i32(rl.GetTime() * 4), 0, 77) % 40 == 0 // relâmpago: ~1 a cada 10 s
@@ -432,12 +431,6 @@ draw_sky :: proc(v: View) {
 			// Nuvem: ruído grosso que anda para o leste.
 			c := cloud(x - drift, y)
 			if c > 0 do rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, {230, 240, 255, u8(c * 70)})
-			if night > 0 {
-				dx, dy := f32(x - s.x), f32(y - s.y) * 1.6
-				light := clamp(math.sqrt(dx * dx + dy * dy) / 14, 0, 1)
-				a := u8(night * 170 * light)
-				if a > 0 do rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, {2, 6, 24, a})
-			}
 		}
 	}
 }
