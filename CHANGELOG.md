@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.9.0 (2026-11-10): água, luz, clima e sons
+
+- **Shader de água:** o mar balança (os `~` ondulam uns 2 px), a crista das ondas clareia e o sol brilha onde elas se somam. As ondas ficam presas ao mundo, não à tela
+- **Dia e noite iguais para todos:** a hora vem do relógio do servidor (o `tick`), e não mais de cada aba. Um dia dura 10 minutos
+- **Luz à noite:** um shader escurece o mar e abre a luz da lanterna do seu barco (tremendo como chama), das lanternas dos outros barcos e dos **faróis** no cais do porto e de cada vila, com o facho girando. De noite o mar não reflete o sol
+- **Clima no mapa todo**, decidido pelo servidor e anunciado para todos: começa limpo e, de 3 a 6 minutos depois, vem chuva ou neblina por 2 a 4 minutos
+  - **Chuva:** riscos caindo e céu mais escuro; a pesca rende 25% a mais (soma com a tempestade)
+  - **Neblina:** só se vê a 16 células do barco. O servidor nem manda os barcos e bichos de longe, então não dá para trapacear
+  - Chuva e neblina entram e saem aos poucos, e o painel mostra o clima e quanto falta para mudar
+- **Sons gerados por código**, sem nenhum arquivo de áudio: tiro, acerto, pesca, moeda, dano, item, sino de alerta, barco afundando e trovão junto do relâmpago, com o mar ao fundo e a chuva quando chove. **N** liga e desliga o som (no navegador, ele começa no primeiro clique)
+- O shader funciona igual na web (WebGL 1) e no desktop (OpenGL 3.3). Se a placa não aceitar, o jogo segue sem o efeito
+- Protocolo versão 9: o clima no fim do `S_STATE` e o evento 42 (`EV_WEATHER`)
+- Os perfis da v0.8 continuam valendo sem conversão, porque o `profile_t` não mudou
+
 ## v0.8.0 (2026-11-10): bosses e armas únicas
 
 - **Bosses**, um por vez, numa agenda própria (pode coincidir com uma tempestade): o primeiro entre 10 e 20 minutos e depois um a cada 20 a 40 minutos, anunciados para todos. Ficam 5 minutos no mar; se ninguém afundar, voltam para o fundo
