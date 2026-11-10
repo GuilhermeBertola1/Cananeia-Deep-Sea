@@ -46,7 +46,7 @@ fx_text :: proc(fx: u8) -> string {
 // A arma equipada (slot 1 do barco), ou ok = false se não tem nenhuma.
 equipped_weapon :: proc() -> (w: Weapon, base: u8, ok: bool) {
 	for it in s.bag {
-		if wp, ok := weapon_of(it.base); ok && it.equipped == 1 do return wp, it.base, true
+		if wp, is_weapon := weapon_of(it.base); is_weapon && it.equipped == 1 do return wp, it.base, true
 	}
 	return {}, 0, false
 }
