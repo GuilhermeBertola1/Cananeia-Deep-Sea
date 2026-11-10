@@ -144,6 +144,8 @@ State :: struct {
 	grabbed:       bool, // preso por um tentáculo: não anda
 	mad:           bool, // louco perto do Cthulhu: o leme está invertido
 	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
+	weather:       u8,   // WEATHER_*: igual para todo mundo
+	weather_secs:  int,  // segundos até o clima mudar
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
 	loot:          [LOOT_SLOTS]Loot,
@@ -808,6 +810,18 @@ on_net_message :: proc(data: []u8) {
 		case EV_BOSS_REWARD:
 			add_popup(COLOR_ACCENT, "+%s", money_text(value))
 			add_log("Sua parte do prêmio: %s por %d de dano.", money_text(value), count)
+		case EV_WEATHER:
+			// `espécie` = o clima novo, `quantidade` = quantos segundos ele dura.
+			switch species {
+			case WEATHER_CLEAR:
+				add_log("O tempo abriu.")
+			case WEATHER_RAIN:
+				add_popup(COLOR_SCHOOL, "Chuva!")
+				add_log("Começou a chover: o peixe sobe e a pesca rende 25%% a mais por %d s.", count)
+			case WEATHER_FOG:
+				add_popup(COLOR_QUIET, "Neblina!")
+				add_log("Neblina! Por %d s só dá para ver barcos e bichos bem perto.", count)
+			}
 		}
 
 
@@ -951,4 +965,9 @@ read_state :: proc(r: ^Reader) {
 	bs.secs = int(read_u16(r))
 	bs.attack = int(read_u8(r))
 	if r.ok do s.boss = bs
+
+	// Desde a v9: o clima.
+	weather := read_u8(r)
+	weather_secs := int(read_u16(r))
+	if r.ok do s.weather, s.weather_secs = weather, weather_secs
 }

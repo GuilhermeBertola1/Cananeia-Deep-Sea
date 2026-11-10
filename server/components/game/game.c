@@ -698,6 +698,10 @@ static void send_state(int slot) {
     put_u16(&w, (uint16_t)b->hp_max);
     put_u16(&w, (uint16_t)(b->kind && b->ends > g.tick ? (b->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     put_u8(&w, b->attack);
+
+    // Desde a v9: o clima, igual no mapa todo.
+    put_u8(&w, g.weather.kind);
+    put_u16(&w, (uint16_t)(g.weather.ends > g.tick ? (g.weather.ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     send_w(slot, &w);
 }
 

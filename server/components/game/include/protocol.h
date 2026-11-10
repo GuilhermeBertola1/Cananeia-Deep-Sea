@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 8
+#define PROTOCOL_VERSION 9
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32

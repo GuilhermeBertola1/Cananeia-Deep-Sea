@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 8
+PROTOCOL_VERSION :: 9
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -81,6 +81,7 @@ EV_BOSS_START :: 38
 EV_BOSS_HIT :: 39
 EV_BOSS_END :: 40
 EV_BOSS_REWARD :: 41
+EV_WEATHER :: 42
 
 // No EV_DIED e no EV_HURT, quem atacou: id do jogador, KILLER_PREDATOR + tipo do bicho
 // ou KILLER_BOSS + tipo do boss.
@@ -93,6 +94,11 @@ WORLD_NONE :: 0
 WORLD_STORM :: 1
 WORLD_SQUID :: 2
 WORLD_GHOST :: 3
+
+// Clima, no mapa todo.
+WEATHER_CLEAR :: 0
+WEATHER_RAIN :: 1
+WEATHER_FOG :: 2
 
 BOSS_NONE :: 0
 BOSS_MEGALODON :: 1

@@ -84,7 +84,12 @@ boss (sempre vem, 13 bytes, para todos os jogadores, perto ou longe):
     u16 vida, u16 vida máxima   a vida é uma só para todos
     u16 segundos que faltam     para ele ir embora
     u8  ataque          ticks do ataque que está acontecendo (investida, tentáculos, anel); 0 = nenhum
+clima (sempre vem, 3 bytes, igual para todos):
+    u8  clima           0 limpo, 1 chuva, 2 neblina
+    u16 segundos até o clima mudar
 ```
+
+Na neblina, a lista de outros barcos e a de bichos só trazem quem está a até 16 células (distância em linha reta). Tiros e o boss continuam vindo.
 
 ### Eventos (`S_EVENT`)
 
@@ -131,6 +136,7 @@ boss (sempre vem, 13 bytes, para todos os jogadores, perto ou longe):
 | 39 | seu tiro acertou o boss: `espécie` = tipo, `quantidade` = dano, `valor` = vida que sobrou nele |
 | 40 | o boss foi embora: `espécie` = tipo, `quantidade` = 1 se afundou (0 se o tempo acabou), `valor` = id de quem levou a arma única + 1 (0 = ninguém) |
 | 41 | sua parte do prêmio do boss: `espécie` = tipo, `quantidade` = seu dano, `valor` = centavos |
+| 42 | o clima mudou (vai para todos): `espécie` = clima novo (0 limpo, 1 chuva, 2 neblina), `quantidade` = segundos que ele dura |
 
 ### `S_INVENTORY`
 
@@ -262,6 +268,14 @@ Bosses e outros NPCs entram aqui como tipos novos.
 | Megalodon | 600 + 300 por jogador | 2 | $1500 | Dente | só em água funda; nada a 5 células/s atrás do barco mais perto (até 25); a 12 células dá uma investida de 2 s a 12 células/s e morde 25; descansa 4 s |
 | Kraken | 900 + 450 por jogador | 3 | $2500 | Tentáculo | parado; a cada 3 s agarra os 3 barcos mais perto (até 12 células): 12 de dano, puxa 2 células e prende por 2 s |
 | Cthulhu | 1500 + 600 por jogador | 4 | $5000 | Cajado | qualquer água, 2 células/s; a cada 5 s um anel de 8 tiros (12 de dano, alcance 16); a até 15 células o leme fica invertido |
+
+### Clima
+
+- Vale para o mapa todo e todo mundo vê igual. O servidor começa com tempo limpo; o primeiro clima vem de 3 a 6 min depois de ligar.
+- Chuva ou neblina (meio a meio) duram de 2 a 4 min; depois o tempo fica limpo de 3 a 6 min e sorteia de novo.
+- **Chuva**: a pesca rende 25% a mais (soma com a tempestade, que é um evento à parte).
+- **Neblina**: só se vê barcos e bichos a até 16 células. O servidor nem manda os de longe.
+- **Dia e noite**: o cliente calcula pelo `tick` do `S_STATE` (um dia = 600 s = 6000 ticks), então é a mesma hora para todos. O servidor não usa a hora para nada.
 
 ## Senhas
 
