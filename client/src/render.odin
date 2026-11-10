@@ -86,6 +86,7 @@ render_init :: proc() {
 	}
 	water_init()
 	light_init()
+	weather_init()
 }
 
 // Desenha um caractere centralizado na célula (sx, sy) da tela.
@@ -160,6 +161,7 @@ draw_world :: proc() {
 			draw_effects(v)
 		case .Sky:
 			draw_sky(v)
+			draw_weather(v.ox, v.oy)
 			draw_night(v.ox, v.oy)
 		}
 	}

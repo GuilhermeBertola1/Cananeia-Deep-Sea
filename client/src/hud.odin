@@ -191,6 +191,14 @@ draw_hud :: proc() {
 		rl.DrawRectangleV({x + 130, y + 3}, {(bar_w - 130) * stock, 6}, stock_color)
 		y += 14
 	}
+	// Clima: chuva ou neblina, e quanto falta para mudar.
+	if s.weather != WEATHER_CLEAR {
+		secs := s.weather_secs
+		effect := "pesca +25%" if s.weather == WEATHER_RAIN else fmt.tprintf("visão de %d células", FOG_VIEW)
+		color := COLOR_SCHOOL if s.weather == WEATHER_RAIN else COLOR_INK
+		text(fmt.tprintf("%s (%d:%02d): %s", weather_name(s.weather), secs / 60, secs % 60, effect), x, y, 10, color)
+		y += 14
+	}
 
 	// Evento do mundo: o que é, quanto tempo falta e onde fica.
 	if s.world.kind != WORLD_NONE {
