@@ -110,6 +110,13 @@
 #define KRAKEN_DAMAGE 12
 #define KRAKEN_PULL 2                // células que o tentáculo puxa o barco para perto
 
+#define CTHULHU_SPEED 2                // células por segundo: lento, mas vai em qualquer água
+#define CTHULHU_RING_EVERY (5 * TICK_HZ) // a cada 5 s, um anel de 8 tiros
+#define CTHULHU_RING_DAMAGE 12
+#define CTHULHU_RING_RANGE 16
+#define CTHULHU_RING_SPEED 2
+#define CTHULHU_MADNESS_R 15           // perto dele, o leme fica invertido
+
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
@@ -224,7 +231,7 @@ typedef struct {
     uint8_t heading;     // para onde nada sem alvo (0 a 7)
     uint8_t move_budget; // em décimos de célula
     uint8_t grabbed;     // preso pelo Tentáculo (sim, até o boss)
-    uint8_t attack;      // ticks de ataque: investida do Megalodon, tentáculos do Kraken
+    uint8_t attack;      // ticks de ataque: investida do Megalodon, tentáculos do Kraken, anel do Cthulhu
     uint8_t rest;        // ticks até poder atacar de novo
     uint32_t ends;       // tick em que vai embora
     uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
@@ -1634,6 +1641,38 @@ static void update_kraken(void) {
     }
 }
 
+// Cthulhu: vem devagar atrás do barco mais perto e, a cada 5 s, solta um anel
+// de 8 tiros em volta. Quem chega a 15 células dele fica louco (is_mad).
+static void update_cthulhu(void) {
+    boss_t *b = &g.boss;
+    if (b->attack) b->attack--;
+    if (b->target >= 0) {
+        const player_t *t = &g.players[b->target];
+        if (t->state != SLOT_PLAYING || in_safe_zone(t->x, t->y) || far_from(t->x, t->y, b->x, b->y, BOSS_SENSE * 2))
+            b->target = -1;
+    }
+    if (b->target < 0 && g.tick % TICK_HZ == 0) b->target = (int8_t)boss_nearest(BOSS_SENSE);
+    boss_swim(b->target >= 0 ? &g.players[b->target] : 0, CTHULHU_SPEED);
+    if (b->rest || b->target < 0) return; // sem ninguém por perto, não gasta o anel
+    b->rest = CTHULHU_RING_EVERY;
+    b->attack = 5;
+    for (int d = 0; d < 8; d++)
+        spawn_shot(KILLER_BOSS + BOSS_CTHULHU, b->x, b->y, b->x + 8 * DIR_X[d], b->y + 8 * DIR_Y[d], CTHULHU_RING_SPEED,
+                   CTHULHU_RING_RANGE, CTHULHU_RING_DAMAGE, FX_NONE);
+}
+
+// Loucura do Cthulhu: barco perto dele (e fora da zona segura) tem o leme invertido.
+static int is_mad(const player_t *p) {
+    return g.boss.kind == BOSS_CTHULHU && !far_from(p->x, p->y, g.boss.x, g.boss.y, CTHULHU_MADNESS_R) &&
+           !in_safe_zone(p->x, p->y);
+}
+
+// Qual boss vem: Megalodon 45%, Kraken 35%, Cthulhu 20% (o mais raro e mais forte).
+static uint8_t pick_boss(void) {
+    uint32_t r = rnd_below(100);
+    return r < 45 ? BOSS_MEGALODON : r < 80 ? BOSS_KRAKEN : BOSS_CTHULHU;
+}
+
 // Lugar para o boss nascer: água do tipo que ele gosta, longe do porto.
 static int boss_spot(int *ox, int *oy) {
     for (int tries = 0; tries < 1000; tries++) {
@@ -1726,7 +1765,7 @@ static int hit_boss(const shot_t *sh, int cx, int cy) {
 static void update_boss(void) {
     boss_t *b = &g.boss;
     if (!b->kind) {
-        if (g.tick >= g.next_boss) start_boss((uint8_t)(BOSS_MEGALODON + rnd_below(2)));
+        if (g.tick >= g.next_boss) start_boss(pick_boss());
         return;
     }
     if (b->hp <= 0) { boss_killed(); return; }
@@ -1739,13 +1778,15 @@ static void update_boss(void) {
     if (b->rest) b->rest--;
     if (b->kind == BOSS_MEGALODON) update_megalodon();
     if (b->kind == BOSS_KRAKEN) update_kraken();
+    if (b->kind == BOSS_CTHULHU) update_cthulhu();
 }
 
 static void update_player(int slot) {
     player_t *p = &g.players[slot];
     // Inércia: com tecla apertada acelera 1 célula/s por tick; soltou,
     // o barco desliza e perde 1 célula/s a cada 2 ticks.
-    int want = dir_index(p->dx, p->dy);
+    // Louco pelo Cthulhu: o leme responde ao contrário.
+    int want = is_mad(p) ? dir_index(-p->dx, -p->dy) : dir_index(p->dx, p->dy);
     if (want >= 0) {
         steer(p, want);
         if (p->vel < p->speed) p->vel++;
