@@ -104,6 +104,12 @@
 #define MEGA_REST (4 * TICK_HZ) // depois de morder (ou errar), descansa
 #define MEGA_BITE 25
 
+#define KRAKEN_REACH 12              // alcance dos tentáculos: canhão (18) e mosquete (14) batem de fora
+#define KRAKEN_ARMS 3                // quantos barcos ele agarra de uma vez
+#define KRAKEN_EVERY (3 * TICK_HZ)   // um ataque a cada 3 s
+#define KRAKEN_DAMAGE 12
+#define KRAKEN_PULL 2                // células que o tentáculo puxa o barco para perto
+
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
@@ -218,7 +224,7 @@ typedef struct {
     uint8_t heading;     // para onde nada sem alvo (0 a 7)
     uint8_t move_budget; // em décimos de célula
     uint8_t grabbed;     // preso pelo Tentáculo (sim, até o boss)
-    uint8_t attack;      // ticks de ataque: investida do Megalodon
+    uint8_t attack;      // ticks de ataque: investida do Megalodon, tentáculos do Kraken
     uint8_t rest;        // ticks até poder atacar de novo
     uint32_t ends;       // tick em que vai embora
     uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
@@ -1133,6 +1139,7 @@ static void die(int slot, int killer) {
     pr->damage = 0;
     p->vel = 0;
     p->move_budget = 0;
+    p->grabbed = 0;
     find_spawn(p);
     update_stats(p);
     storage_save(p->profile, pr);
@@ -1595,6 +1602,38 @@ static void update_megalodon(void) {
     }
 }
 
+// Kraken: fica parado no fundo e, a cada 3 s, os tentáculos agarram os 3
+// barcos mais perto (até 12 células): tiram vida, prendem por 2 s e puxam
+// o barco para perto dele. Quem tem arma de longe bate sem ser pego.
+static void update_kraken(void) {
+    boss_t *b = &g.boss;
+    if (b->attack) b->attack--;
+    if (b->rest) return;
+    b->rest = KRAKEN_EVERY;
+    uint8_t taken[MAX_PLAYERS] = {0};
+    for (int arm = 0; arm < KRAKEN_ARMS; arm++) {
+        int best = KRAKEN_REACH * KRAKEN_REACH + 1, slot = -1;
+        for (int t = 0; t < MAX_PLAYERS; t++) {
+            const player_t *p = &g.players[t];
+            int dx = p->x - b->x, dy = p->y - b->y;
+            if (p->state == SLOT_PLAYING && !taken[t] && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
+                best = dx * dx + dy * dy, slot = t;
+        }
+        if (slot < 0) break;
+        taken[slot] = 1;
+        b->attack = 5; // o cliente desenha os tentáculos por meio segundo
+        player_t *p = &g.players[slot];
+        for (int i = 0; i < KRAKEN_PULL; i++) {
+            int nx = p->x + ((b->x > p->x) - (b->x < p->x)), ny = p->y + ((b->y > p->y) - (b->y < p->y));
+            if (iabs(nx - b->x) <= 1 && iabs(ny - b->y) <= 1) break; // já está colado nele
+            if (tile_is_sailable(tile(nx, ny))) p->x = (int16_t)nx, p->y = (int16_t)ny;
+        }
+        p->grabbed = GRAB_TICKS;
+        p->vel = 0;
+        boss_hurt(slot, KRAKEN_DAMAGE);
+    }
+}
+
 // Lugar para o boss nascer: água do tipo que ele gosta, longe do porto.
 static int boss_spot(int *ox, int *oy) {
     for (int tries = 0; tries < 1000; tries++) {
@@ -1687,7 +1726,7 @@ static int hit_boss(const shot_t *sh, int cx, int cy) {
 static void update_boss(void) {
     boss_t *b = &g.boss;
     if (!b->kind) {
-        if (g.tick >= g.next_boss) start_boss(BOSS_MEGALODON);
+        if (g.tick >= g.next_boss) start_boss((uint8_t)(BOSS_MEGALODON + rnd_below(2)));
         return;
     }
     if (b->hp <= 0) { boss_killed(); return; }
@@ -1699,6 +1738,7 @@ static void update_boss(void) {
     if (b->grabbed) b->grabbed--;
     if (b->rest) b->rest--;
     if (b->kind == BOSS_MEGALODON) update_megalodon();
+    if (b->kind == BOSS_KRAKEN) update_kraken();
 }
 
 static void update_player(int slot) {
