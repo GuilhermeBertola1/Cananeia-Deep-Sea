@@ -12,6 +12,7 @@ AFFIX_NONE :: 0xFF
 RARITY_LEGENDARY :: 3
 ENCHANT_MAX :: 3
 ITEM_NONE :: 0
+ITEM_DENTE :: 11 // a primeira arma única (as de boss vêm depois de todos os outros itens)
 
 Item :: struct {
 	base:     u8, // ITEM_NONE = slot vazio
@@ -34,6 +35,9 @@ ITEM_NAMES := [?]string {
 	"Casco reforçado",
 	"Amuleto de búzios",
 	"Isca encantada",
+	"Dente do Megalodon",
+	"Tentáculo do Kraken",
+	"Cajado de R'lyeh",
 }
 
 AFFIX_NAMES := [?]string{"Veloz", "Robusto", "Afiado", "do Pescador", "da Sorte"}
@@ -60,6 +64,11 @@ combine_rarity :: proc(a, b: Item) -> u8 {
 	r := max(a.rarity, b.rarity)
 	if a.rarity == b.rarity && r < RARITY_LEGENDARY do r += 1
 	return r
+}
+
+// Arma única de boss: sempre lendária, nunca sai de baú.
+item_is_unique :: proc(base: u8) -> bool {
+	return base >= ITEM_DENTE && int(base) < len(ITEM_NAMES)
 }
 
 item_name :: proc(base: u8) -> string {

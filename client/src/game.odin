@@ -552,10 +552,13 @@ village_fav :: proc() -> (int, bool) {
 	return 0, false
 }
 
-// Quem atacou: um jogador, ou um bicho (KILLER_PREDATOR + tipo).
+// Quem atacou: um jogador, um bicho (KILLER_PREDATOR + tipo) ou um boss (KILLER_BOSS + tipo).
 attacker_name :: proc(id: int) -> string {
 	if id == KILLER_PREDATOR + PRED_SHARK do return "Um tubarão"
 	if id == KILLER_PREDATOR + PRED_GHOST do return "O navio fantasma"
+	if id == KILLER_BOSS + BOSS_MEGALODON do return "O Megalodon"
+	if id == KILLER_BOSS + BOSS_KRAKEN do return "O Kraken"
+	if id == KILLER_BOSS + BOSS_CTHULHU do return "O Cthulhu"
 	return player_name(id)
 }
 
@@ -657,8 +660,14 @@ on_net_message :: proc(data: []u8) {
 			add_log("Bem-vindo, %s! No cais (H), aperte E para falar com o lojista (L).", s.players[s.my_id].name)
 		case EV_ITEM:
 			// No baú, `species` é o tipo do item e `count` a raridade.
-			add_popup(rarity_color(u8(count)), "Baú! %s", item_name(u8(species)))
-			add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
+			if item_is_unique(u8(species)) {
+				// Também chega assim a arma única de quem mais bateu no boss.
+				add_popup(rarity_color(u8(count)), "%s!", item_name(u8(species)))
+				add_log("Arma única! O %s é seu. Equipe no inventário (I).", item_name(u8(species)))
+			} else {
+				add_popup(rarity_color(u8(count)), "Baú! %s", item_name(u8(species)))
+				add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
+			}
 		case EV_BAG_FULL:
 			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
 		case EV_CRASH:
@@ -772,6 +781,33 @@ on_net_message :: proc(data: []u8) {
 			case WORLD_SQUID: add_log("A maré de lulas acabou.")
 			case WORLD_GHOST: add_log("O navio fantasma se foi.")
 			}
+		case EV_BOSS_START:
+			// Igual ao evento do mundo: `value` = x + y × 65536, `count` = segundos.
+			dir, dist := compass(i32(value & 0xFFFF), i32(value >> 16))
+			add_popup(boss_color(u8(species)), "%s!", boss_name(u8(species)))
+			switch species {
+			case BOSS_MEGALODON:
+				add_log("O Megalodon apareceu a %d células (%s)! Cuidado com a investida.", dist, dir)
+			case BOSS_KRAKEN:
+				add_log("O Kraken emergiu a %d células (%s)! Bata de longe: os tentáculos alcançam %d.", dist, dir, KRAKEN_REACH)
+			case BOSS_CTHULHU:
+				add_log("Cthulhu despertou a %d células (%s)! Perto dele, o leme enlouquece.", dist, dir)
+			}
+			add_log("Juntem-se! Quem der mais dano leva a arma única. %d s para afundá-lo.", count)
+		case EV_BOSS_HIT:
+			add_log("Acertou o %s! -%d, sobrou %d de vida.", boss_name(u8(species)), count, value)
+		case EV_BOSS_END:
+			// `count` 1 = afundou; `value` = id de quem levou a arma + 1.
+			if count == 0 {
+				add_log("O %s voltou para o fundo do mar.", boss_name(u8(species)))
+			} else if value > 0 {
+				add_log("O %s afundou! %s levou a arma única.", boss_name(u8(species)), player_name(int(value) - 1))
+			} else {
+				add_log("O %s afundou!", boss_name(u8(species)))
+			}
+		case EV_BOSS_REWARD:
+			add_popup(COLOR_ACCENT, "+%s", money_text(value))
+			add_log("Sua parte do prêmio: %s por %d de dano.", money_text(value), count)
 		}
 
 

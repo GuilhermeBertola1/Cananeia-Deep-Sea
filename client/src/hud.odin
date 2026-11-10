@@ -64,6 +64,10 @@ draw_map_at :: proc(x, y, size: f32) {
 	for p in s.predators[:s.pred_count] {
 		dot(x, y, k, p.x, p.y, max(1, k), COLOR_GHOST if p.kind == PRED_GHOST else COLOR_SHARK)
 	}
+	// Boss: um quadrado grande piscando, para todo mundo achar.
+	if s.boss.kind != BOSS_NONE && int(rl.GetTime() * 4) % 2 == 0 {
+		dot(x, y, k, s.boss.x, s.boss.y, max(3, 3 * k), boss_color(s.boss.kind))
+	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
 	for b in s.boats[:s.boat_count] {
 		dot(x, y, k, b.x, b.y, max(2, 1.5 * k), PLAYER_COLORS[s.players[b.id].color % len(PLAYER_COLORS)])
@@ -109,6 +113,24 @@ world_color :: proc(kind: u8) -> rl.Color {
 	case WORLD_STORM: return {170, 190, 225, 255}
 	case WORLD_SQUID: return SPECIES[8].color // lula-gigante
 	case WORLD_GHOST: return COLOR_GHOST
+	}
+	return COLOR_QUIET
+}
+
+boss_name :: proc(kind: u8) -> string {
+	switch kind {
+	case BOSS_MEGALODON: return "Megalodon"
+	case BOSS_KRAKEN: return "Kraken"
+	case BOSS_CTHULHU: return "Cthulhu"
+	}
+	return "?"
+}
+
+boss_color :: proc(kind: u8) -> rl.Color {
+	switch kind {
+	case BOSS_MEGALODON: return COLOR_MEGALODON
+	case BOSS_KRAKEN: return COLOR_KRAKEN
+	case BOSS_CTHULHU: return COLOR_CTHULHU
 	}
 	return COLOR_QUIET
 }
@@ -178,6 +200,13 @@ draw_hud :: proc() {
 		text(fmt.tprintf("%s (%d:%02d): %s", world_name(s.world.kind), secs / 60, secs % 60, place), x, y, 10, world_color(s.world.kind))
 		y += 14
 	}
+	// Boss: quanto tempo falta para ele ir embora e onde está.
+	if s.boss.kind != BOSS_NONE {
+		dir, dist := compass(s.boss.x, s.boss.y)
+		secs := s.boss.secs
+		text(fmt.tprintf("Boss %s (%d:%02d): %d %s", boss_name(s.boss.kind), secs / 60, secs % 60, dist, dir), x, y, 10, boss_color(s.boss.kind))
+		y += 14
+	}
 
 	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
@@ -203,6 +232,7 @@ draw_hud :: proc() {
 	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
 	draw_log(px)
+	draw_boss_bar(px)
 	tip := ""
 	if s.at_dock do tip = "No cais. E: lojista (L)  U: estaleiro (E)  B: mercenário (M)  C: mecânico (C)"
 	if s.at_mermaid do tip = "A sereia (S) está ouvindo. E: falar com ela"
@@ -216,6 +246,24 @@ draw_hud :: proc() {
 		text(tip, tx, 13, 20, COLOR_ACCENT)
 	}
 
+}
+
+// Barra de vida do boss no alto da tela. A vida é uma só para todo mundo,
+// então ela aparece mesmo para quem ainda está longe, indo ajudar.
+@(private = "file")
+draw_boss_bar :: proc(world_w: f32) {
+	b := s.boss
+	if b.kind == BOSS_NONE || menu_open() do return
+	w := min(world_w - 40, 420)
+	x := (world_w - w) / 2
+	y: f32 = 46 // embaixo da dica do cais (8 a 38)
+	color := boss_color(b.kind)
+	frac := f32(b.hp) / f32(max(b.hp_max, 1))
+	rl.DrawRectangleV({x - 8, y - 4}, {w + 16, 40}, {0, 0, 0, 170})
+	title := fmt.tprintf("%s  %d/%d", boss_name(b.kind), b.hp, b.hp_max)
+	text(title, x + (w - text_width(title, 20)) / 2, y, 20, color)
+	rl.DrawRectangleV({x, y + 22}, {w, 8}, {40, 50, 66, 255})
+	rl.DrawRectangleV({x, y + 22}, {w * frac, 8}, color)
 }
 
 // Diário de bordo no canto de baixo, sumindo com o tempo.
