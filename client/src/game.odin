@@ -144,6 +144,8 @@ State :: struct {
 	grabbed:       bool, // preso por um tentáculo: não anda
 	mad:           bool, // louco perto do Cthulhu: o leme está invertido
 	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
+	weather:       u8,   // WEATHER_*: igual para todo mundo
+	weather_secs:  int,  // segundos até o clima mudar
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
 	loot:          [LOOT_SLOTS]Loot,
@@ -207,6 +209,7 @@ init :: proc() {
 	rl.SetTargetFPS(60)
 	rl.SetExitKey(.KEY_NULL) // Esc fecha a loja, não o jogo
 	render_init()
+	sound_init()
 	s.url = net_default_url()
 	for &p, i in s.prices do p = SPECIES[i].price_cents
 	s.capacity = 150
@@ -223,6 +226,7 @@ should_run :: proc() -> bool {
 }
 
 update :: proc() {
+	sound_update()
 	switch s.screen {
 	case .Join:
 		update_join()
@@ -251,6 +255,7 @@ update :: proc() {
 }
 
 shutdown :: proc() {
+	sound_shutdown()
 	rl.CloseWindow()
 }
 
@@ -354,11 +359,13 @@ update_playing :: proc() {
 			if mx, my, ok := mouse_cell(); ok {
 				send_fire(mx, my)
 				s.fire_tick = s.tick
+				play_sfx(.Shot)
 			}
 		}
 	}
 
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
+	if rl.IsKeyPressed(.N) do add_log("Som ligado." if toggle_sound() else "Som desligado. N liga de novo.")
 	// E fala com quem está perto: o lojista no cais, a sereia na pedra dela.
 	if rl.IsKeyPressed(.E) && !s.inv_open {
 		if s.shop_open || s.mermaid_open {
@@ -647,9 +654,11 @@ on_net_message :: proc(data: []u8) {
 		if !r.ok do return
 		switch kind {
 		case EV_CATCH:
+			play_sfx(.Catch)
 			add_popup(SPECIES[species].color, "+%d %s", count, species_name(species))
 			add_log("+%d %s", count, species_name(species))
 		case EV_SOLD:
+			play_sfx(.Coin)
 			add_popup(COLOR_ACCENT, "+%s", money_text(value))
 			add_log("Vendeu %d peixe(s) por %s.", count, money_text(value))
 		case EV_HOLD_FULL:
@@ -659,6 +668,7 @@ on_net_message :: proc(data: []u8) {
 		case EV_WELCOME:
 			add_log("Bem-vindo, %s! No cais (H), aperte E para falar com o lojista (L).", s.players[s.my_id].name)
 		case EV_ITEM:
+			play_sfx(.Item)
 			// No baú, `species` é o tipo do item e `count` a raridade.
 			if item_is_unique(u8(species)) {
 				// Também chega assim a arma única de quem mais bateu no boss.
@@ -671,11 +681,13 @@ on_net_message :: proc(data: []u8) {
 		case EV_BAG_FULL:
 			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
 		case EV_CRASH:
+			play_sfx(.Hurt)
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
 			add_log("Bateu na costa! -%d de vida, sobrou %d. Perto da terra, vá devagar.", count, value)
 		case EV_BROKEN:
 			add_log("Barco avariado! Só anda devagar. Conserte no estaleiro (U) do porto.")
 		case EV_UPGRADED:
+			play_sfx(.Item)
 			add_popup(COLOR_ACCENT, "%s nível %d!", part_name(species), count + 1)
 			add_log("Estaleiro: %s agora é nível %d, por %s.", part_name(species), count + 1, money_text(value))
 		case EV_REPAIRED:
@@ -685,19 +697,24 @@ on_net_message :: proc(data: []u8) {
 			who := "Mecânico" if s.mech_open else "Estaleiro"
 			add_log("%s: \"Isso custa %s, marujo. Volte com o dinheiro.\"", who, money_text(value))
 		case EV_HIT:
+			play_sfx(.Hit)
 			// Nos tiros, `species` é o id do outro jogador.
 			add_log("Acertou %s! -%d, sobrou %d de vida.", player_name(species), count, value)
 		case EV_HURT:
+			play_sfx(.Hurt)
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
 			add_log("%s te acertou! -%d de vida, sobrou %d.", attacker_name(species), count, value)
 		case EV_SAFE_ZONE:
 			add_log("Zona segura: perto do porto ninguém atira.")
 		case EV_KILL:
+			play_sfx(.Sink)
 			add_popup(COLOR_ACCENT, "Afundou %s!", player_name(species))
 			add_log("Você afundou %s! A bag e a coroa ficaram boiando.", player_name(species))
 		case EV_DIED:
+			play_sfx(.Sink)
 			add_log("%s afundou seu barco! %d peixe(s) ficaram na bag. Você voltou ao porto.", attacker_name(species), count)
 		case EV_LOOT:
+			play_sfx(.Item)
 			what := "bag" if species == LOOT_BAG else "coroa"
 			if count == 1 {
 				add_log("Recuperou sua %s!", what)
@@ -708,7 +725,10 @@ on_net_message :: proc(data: []u8) {
 		case EV_LOOT_FULL:
 			add_log("O barco já carrega %d saques: não cabe mais nenhum.", LOOT_SLOTS)
 		case EV_MERC:
-			if value > 0 do add_popup(COLOR_ACCENT, "+%s", money_text(value))
+			if value > 0 {
+				add_popup(COLOR_ACCENT, "+%s", money_text(value))
+				play_sfx(.Coin)
+			}
 			add_log("Mercenário: \"Passei %d peixe(s) para o seu porão e paguei %s pelas coroas.\"", count, money_text(value))
 			if species == 1 do add_log("O porão encheu e o resto ficou na bag. Venda os peixes e volte.")
 		case EV_MERC_NOTHING:
@@ -720,6 +740,7 @@ on_net_message :: proc(data: []u8) {
 		case EV_SPIN_WAIT:
 			add_log("Sereia: \"Volte daqui a %d segundos, marujo.\"", value)
 		case EV_SPIN_STEAL:
+			play_sfx(.Hurt)
 			if value > 0 {
 				add_popup({255, 107, 107, 255}, "-%s", money_text(value))
 				add_log("A sereia te encantou com a voz e levou %s!", money_text(value))
@@ -730,6 +751,7 @@ on_net_message :: proc(data: []u8) {
 			add_popup(COLOR_MERMAID, "Missão: %s", mission_target())
 			add_log("Sereia: \"Afunde %s e me traga a coroa. Eu encanto um item seu.\"", mission_target())
 		case EV_HUNTED:
+			play_sfx(.Alert)
 			add_popup({255, 107, 107, 255}, "Caçado!")
 			add_log("A sereia mandou %s atrás da sua coroa. Cuidado no mar aberto!", player_name(species))
 		case EV_SPIN_NOTHING:
@@ -737,6 +759,7 @@ on_net_message :: proc(data: []u8) {
 		case EV_MISSION_WAIT:
 			add_log("Sereia: \"Cadê a coroa de %s? Afunde o barco e pegue a coroa no mar.\"", mission_target())
 		case EV_ENCHANT:
+			play_sfx(.Item)
 			// No encanto, `species` é o tipo do item e `count` o nível novo.
 			add_popup(COLOR_MERMAID, "%s +%d!", item_name(u8(species)), count)
 			add_log("A sereia encantou seu %s: agora é +%d. Veja no inventário (I).", item_name(u8(species)), count)
@@ -745,18 +768,22 @@ on_net_message :: proc(data: []u8) {
 		case EV_MISSION_GIVE_UP:
 			add_log("Você desistiu da missão da sereia.")
 		case EV_COMBINED:
+			play_sfx(.Item)
 			// No mecânico, `species` é o tipo do item novo e `count` a raridade.
 			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
 			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
 		case EV_CANT_COMBINE:
 			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
 		case EV_BITTEN:
+			play_sfx(.Hurt)
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
 			add_log("Um tubarão te mordeu! -%d de vida, sobrou %d. Fuja para o raso!", count, value)
 		case EV_PREDATOR_HIT:
+			play_sfx(.Hit)
 			what := "o navio fantasma" if species == PRED_GHOST else "o tubarão"
 			add_log("Acertou %s! -%d, sobrou %d de vida nele.", what, count, value)
 		case EV_PREDATOR_KILL:
+			play_sfx(.Coin)
 			add_popup(COLOR_ACCENT, "+%s", money_text(value))
 			if species == PRED_GHOST {
 				add_log("O navio fantasma afundou! Você deu %d de dano e ficou com %s e um baú.", count, money_text(value))
@@ -764,6 +791,7 @@ on_net_message :: proc(data: []u8) {
 				add_log("Afundou um tubarão! O porto paga %s pela barbatana.", money_text(value))
 			}
 		case EV_WORLD_START:
+			play_sfx(.Alert)
 			// `value` traz onde: x nos 16 bits de baixo, y nos de cima.
 			dir, dist := compass(i32(value & 0xFFFF), i32(value >> 16))
 			add_popup(world_color(u8(species)), "%s!", world_name(u8(species)))
@@ -782,6 +810,7 @@ on_net_message :: proc(data: []u8) {
 			case WORLD_GHOST: add_log("O navio fantasma se foi.")
 			}
 		case EV_BOSS_START:
+			play_sfx(.Alert)
 			// Igual ao evento do mundo: `value` = x + y × 65536, `count` = segundos.
 			dir, dist := compass(i32(value & 0xFFFF), i32(value >> 16))
 			add_popup(boss_color(u8(species)), "%s!", boss_name(u8(species)))
@@ -795,8 +824,10 @@ on_net_message :: proc(data: []u8) {
 			}
 			add_log("Juntem-se! Quem der mais dano leva a arma única. %d s para afundá-lo.", count)
 		case EV_BOSS_HIT:
+			play_sfx(.Hit)
 			add_log("Acertou o %s! -%d, sobrou %d de vida.", boss_name(u8(species)), count, value)
 		case EV_BOSS_END:
+			play_sfx(.Sink)
 			// `count` 1 = afundou; `value` = id de quem levou a arma + 1.
 			if count == 0 {
 				add_log("O %s voltou para o fundo do mar.", boss_name(u8(species)))
@@ -806,8 +837,22 @@ on_net_message :: proc(data: []u8) {
 				add_log("O %s afundou!", boss_name(u8(species)))
 			}
 		case EV_BOSS_REWARD:
+			play_sfx(.Coin)
 			add_popup(COLOR_ACCENT, "+%s", money_text(value))
 			add_log("Sua parte do prêmio: %s por %d de dano.", money_text(value), count)
+		case EV_WEATHER:
+			play_sfx(.Alert)
+			// `espécie` = o clima novo, `quantidade` = quantos segundos ele dura.
+			switch species {
+			case WEATHER_CLEAR:
+				add_log("O tempo abriu.")
+			case WEATHER_RAIN:
+				add_popup(COLOR_SCHOOL, "Chuva!")
+				add_log("Começou a chover: o peixe sobe e a pesca rende 25%% a mais por %d s.", count)
+			case WEATHER_FOG:
+				add_popup(COLOR_QUIET, "Neblina!")
+				add_log("Neblina! Por %d s só dá para ver barcos e bichos bem perto.", count)
+			}
 		}
 
 
@@ -951,4 +996,9 @@ read_state :: proc(r: ^Reader) {
 	bs.secs = int(read_u16(r))
 	bs.attack = int(read_u8(r))
 	if r.ok do s.boss = bs
+
+	// Desde a v9: o clima.
+	weather := read_u8(r)
+	weather_secs := int(read_u16(r))
+	if r.ok do s.weather, s.weather_secs = weather, weather_secs
 }

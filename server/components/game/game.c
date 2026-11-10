@@ -82,6 +82,15 @@
 #define GHOST_SHOT_SPEED 2
 #define GHOST_BOUNTY_CENTS 30000   // $300 divididos entre quem acertou
 
+// Clima (v0.9): vale para o mapa todo e se alterna com o tempo limpo.
+// Chuva: o peixe sobe e a pesca rende mais. Neblina: o servidor só conta
+// onde estão os barcos e os bichos que estão a menos de FOG_VIEW células.
+#define WEATHER_FIRST (3 * 60 * TICK_HZ) // o primeiro vem entre 3 e 6 min
+#define WEATHER_GAP (3 * 60 * TICK_HZ)   // tempo limpo entre um e outro: 3 a 6 min
+#define WEATHER_TIME (2 * 60 * TICK_HZ)  // chuva ou neblina duram 2 a 4 min
+#define RAIN_CATCH_PCT 125               // chuva: pesca 25% maior
+#define FOG_VIEW 16                      // neblina: só se vê até 16 células
+
 // Poderes das armas únicas (weapon_t.fx).
 #define LEECH_PCT 25          // Dente: % do dano que volta como conserto
 #define GRAB_TICKS (2 * TICK_HZ) // Tentáculo: tempo que o alvo fica preso
@@ -209,6 +218,12 @@ typedef struct {
     uint32_t ends; // tick em que acaba
 } world_event_t;
 
+// O clima agora e quando ele muda.
+typedef struct {
+    uint8_t kind;  // WEATHER_*
+    uint32_t ends; // tick em que muda (para limpo ou para o próximo)
+} weather_t;
+
 // Cada boss: vida (base + um tanto por jogador online), tamanho, prêmio e arma única.
 typedef struct {
     uint16_t hp_base, hp_per_player;
@@ -267,6 +282,7 @@ static struct {
     uint16_t ghost_dmg[MAX_PLAYERS]; // dano que cada slot deu nele
     boss_t boss;
     uint32_t next_boss; // tick em que aparece o próximo boss
+    weather_t weather;
 } g;
 
 static uint8_t out[1024];
@@ -569,6 +585,14 @@ static int near(int x, int y, int ox, int oy, int extra) {
            dy <= VIEW_RADIUS + extra;
 }
 
+// Perto o bastante para aparecer na tela e, na neblina, perto o bastante para ver.
+static int visible(int x, int y, const player_t *p) {
+    if (!near(x, y, p->x, p->y, 0)) return 0;
+    if (g.weather.kind != WEATHER_FOG) return 1;
+    int dx = x - p->x, dy = y - p->y;
+    return dx * dx + dy * dy <= FOG_VIEW * FOG_VIEW;
+}
+
 static int is_mad(const player_t *p); // na seção dos bosses
 
 static void send_state(int slot) {
@@ -601,7 +625,7 @@ static void send_state(int slot) {
     uint8_t n = 0;
     for (int i = 0; i < MAX_PLAYERS; i++) {
         const player_t *o = &g.players[i];
-        if (i == slot || o->state != SLOT_PLAYING || !near(o->x, o->y, p->x, p->y, 0)) continue;
+        if (i == slot || o->state != SLOT_PLAYING || !visible(o->x, o->y, p)) continue;
         put_u8(&w, (uint8_t)i);
         put_u16(&w, (uint16_t)o->x);
         put_u16(&w, (uint16_t)o->y);
@@ -645,7 +669,7 @@ static void send_state(int slot) {
     n = 0;
     for (int i = 0; i < MAX_PREDATORS; i++) {
         const predator_t *pd = &g.predators[i];
-        if (!pd->alive || !near(pd->x, pd->y, p->x, p->y, 0)) continue;
+        if (!pd->alive || !visible(pd->x, pd->y, p)) continue;
         int max = pd->kind == PRED_GHOST ? GHOST_HP : SHARK_HP;
         put_u8(&w, pd->kind);
         put_u16(&w, (uint16_t)pd->x);
@@ -674,6 +698,10 @@ static void send_state(int slot) {
     put_u16(&w, (uint16_t)b->hp_max);
     put_u16(&w, (uint16_t)(b->kind && b->ends > g.tick ? (b->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     put_u8(&w, b->attack);
+
+    // Desde a v9: o clima, igual no mapa todo.
+    put_u8(&w, g.weather.kind);
+    put_u16(&w, (uint16_t)(g.weather.ends > g.tick ? (g.weather.ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     send_w(slot, &w);
 }
 
@@ -1544,6 +1572,23 @@ static void storm(int slot) {
     }
 }
 
+// --- clima ----------------------------------------------------------------------
+
+// Na hora marcada o clima muda: do limpo para chuva ou neblina (meio a meio)
+// e de volta para o limpo. Todo mundo fica sabendo pelo EV_WEATHER.
+static void update_weather(void) {
+    weather_t *w = &g.weather;
+    if (g.tick < w->ends) return;
+    if (w->kind == WEATHER_CLEAR) {
+        w->kind = (uint8_t)(WEATHER_RAIN + rnd_below(2));
+        w->ends = g.tick + WEATHER_TIME + rnd_below(WEATHER_TIME);
+    } else {
+        w->kind = WEATHER_CLEAR;
+        w->ends = g.tick + WEATHER_GAP + rnd_below(WEATHER_GAP);
+    }
+    event_all(EV_WEATHER, w->kind, (uint16_t)((w->ends - g.tick) / TICK_HZ), 0);
+}
+
 // --- bosses -------------------------------------------------------------------
 
 // O Megalodon só nada no fundo; nenhum boss entra em zona segura.
@@ -1834,6 +1879,7 @@ static void update_player(int slot) {
     uint32_t passive = (uint32_t)(PASSIVE_CATCH_PCT * 10 * (100 + production) / 100);
     uint32_t school = (uint32_t)(SCHOOL_CATCH_PCT * 10 * (100 + production) / 100);
     if (in_storm) passive = passive * STORM_CATCH_PCT / 100, school = school * STORM_CATCH_PCT / 100;
+    if (g.weather.kind == WEATHER_RAIN) passive = passive * RAIN_CATCH_PCT / 100, school = school * RAIN_CATCH_PCT / 100;
     if (moved && chance_permille(with_stock(passive, p->x, p->y))) {
         uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
         if (sp != FISH_NONE) add_fish(slot, sp, 1);
@@ -2080,6 +2126,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
     g.ghost = -1;
     g.next_boss = BOSS_FIRST + rnd_below(BOSS_FIRST);
+    g.weather.ends = WEATHER_FIRST + rnd_below(WEATHER_FIRST); // começa limpo
 }
 
 int game_connect(void) {
@@ -2156,6 +2203,7 @@ void game_tick(void) {
     g.tick++;
     if (g.tick % STOCK_REGEN_EVERY == 0) regen_stock();
     update_world();
+    update_weather();
     update_schools();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) update_player(i);

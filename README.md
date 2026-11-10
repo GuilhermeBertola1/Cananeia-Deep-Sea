@@ -25,6 +25,7 @@ O protótipo antigo em TypeScript está no branch `prototipo-ts`.
 | G / X | na sereia: girar a roleta ou entregar a coroa / desistir da missão |
 | Clique / Espaço | atirar na mira `+` (com uma arma equipada) |
 | M | mapa grande |
+| N | liga e desliga o som |
 | I | inventário: W/S escolhe, Enter equipa ou tira, X duas vezes joga fora |
 | Esc | fechar janela |
 
@@ -40,11 +41,13 @@ O mar está vivo. Cada região tem uma quantidade de peixe: pesque demais no mes
 
 E às vezes sobe um boss, anunciado para todos, com uma vida só para o servidor inteiro: o Megalodon, que dá investidas no mar fundo; o Kraken, que agarra e puxa quem chega perto; ou o Cthulhu, que atira em volta e enlouquece o leme de quem se aproxima. O dinheiro é dividido pelo dano, e quem mais bateu leva a arma única do boss: o Dente que conserta o barco, o Tentáculo que prende o alvo ou o Cajado que atira em leque.
 
+O mar balança, o dia vira noite na mesma hora para todo mundo e, no escuro, só se enxerga até onde vai a lanterna do barco e o facho dos faróis. O clima muda para todos: a chuva faz o peixe subir, e a neblina esconde quem está a mais de 16 células. Tudo tem som, gerado pelo próprio jogo (N desliga).
+
 ## Estrutura
 
 ```
 client/                 cliente (Odin + raylib -> WASM)
-  src/                  pacote do jogo: mundo, rede, desenho, HUD
+  src/                  pacote do jogo: mundo, rede, desenho, HUD, shaders e sons
   src/main_web/         entrada da versão web (navegador)
   src/main_desktop/     entrada desktop (modo offline, para testar o visual)
   web/index.html        página que carrega o WASM
