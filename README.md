@@ -55,7 +55,7 @@ client/                 cliente (Odin + raylib -> WASM)
 server/                 servidor
   main/                 ESP32-S3: Wi-Fi, HTTP, WebSocket, tarefa do jogo
   components/game/      núcleo do jogo em C (igual no ESP32 e no PC)
-  host/                 servidor de teste para o PC (mesmo núcleo)
+  host/                 servidor de teste para o PC (mesmo núcleo) e robôs do teste de carga
   partitions.csv        app 4 MB (com o cliente web dentro), perfis 1 MB
 docs/
   protocol.md           mensagens da rede
@@ -86,6 +86,19 @@ idf.py -p COM5 flash monitor
 ```
 
 Conecte na rede Wi-Fi `CananeiaDeepSea` (senha `cananeia123`) e abra http://192.168.4.1. Para usar a rede da sua casa: `idf.py menuconfig` → *Cananeia Deep Sea*.
+
+**Teste de carga com robôs:**
+
+O `server\host\build.bat` também compila o `bots.exe`, que coloca jogadores falsos (`robo1`, `robo2`..., senha `robo1234`) para navegar, atirar e vender sozinhos:
+
+```bat
+server\host\bots.exe 127.0.0.1 8080 8 5
+server\host\bots.exe 192.168.4.1 80 8 60
+```
+
+O primeiro testa o servidor do PC com 8 robôs por 5 minutos; o segundo, o ESP32 por 1 hora (é o padrão, então `bots.exe` sozinho faz o mesmo). A cada minuto ele mostra quantos estão jogando, as quedas e o `/status` do servidor, e no fim diz `PASSOU` ou `NÃO PASSOU`.
+
+A saúde do servidor fica em http://192.168.4.1/status (ou http://localhost:8080/status no PC): tempo ligado, jogadores, memória livre (`heap_free`) e a menor até agora (`heap_min`), tick médio e mais lento, ticks atrasados e envios que falharam. No ESP32 a mesma linha sai no monitor serial a cada minuto.
 
 ## Contribuindo
 

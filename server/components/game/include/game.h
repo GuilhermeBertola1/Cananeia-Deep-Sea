@@ -22,3 +22,4 @@ void game_disconnect(int slot); // salva o perfil e libera o slot
 void game_receive(int slot, const uint8_t *data, size_t len);
 void game_tick(void);           // chamar TICK_HZ vezes por segundo
 void game_save_all(void);
+int game_online(void);          // quantos estão jogando agora (para o /status)

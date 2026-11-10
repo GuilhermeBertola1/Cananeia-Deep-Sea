@@ -5,6 +5,7 @@ server/build-qemu/
 server/host/cananeia-host
 server/host/test_items
 server/host/test_password
+server/host/bots
 *.exe
 *.obj
 *.pdb

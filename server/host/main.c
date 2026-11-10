@@ -17,22 +17,30 @@
 typedef SOCKET sock_t;
 #define close_sock closesocket
 #define BAD_SOCK INVALID_SOCKET
-static uint64_t now_ms(void) { return GetTickCount64(); }
+static uint64_t now_us(void) {
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER t;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t);
+    return (uint64_t)(t.QuadPart / freq.QuadPart * 1000000 + t.QuadPart % freq.QuadPart * 1000000 / freq.QuadPart);
+}
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 typedef int sock_t;
 #define close_sock close
 #define BAD_SOCK (-1)
-static uint64_t now_ms(void) {
+static uint64_t now_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    return (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
 }
 #endif
+static uint64_t now_ms(void) { return now_us() / 1000; }
 
 #define MAX_CLIENTS 16
 #define IN_CAP 8192
@@ -48,6 +56,14 @@ typedef struct {
 static client_t clients[MAX_CLIENTS];
 static int slot_client[MAX_PLAYERS];
 static const char *www = "../client/build/web";
+
+// Saúde do servidor (rota /status), com os mesmos nomes do ESP32.
+static struct {
+    uint64_t started_ms;
+    uint64_t tick_sum_us, ticks; // para a média
+    uint64_t tick_max_us;
+    unsigned late_ticks, joins;
+} stats;
 
 // --- SHA-1 e base64, só para o aperto de mão do WebSocket --------------------
 
@@ -150,6 +166,17 @@ static void http_reply(sock_t fd, const char *status, const char *type, const vo
     send_raw(fd, body, len);
 }
 
+static void serve_status(sock_t fd) {
+    char body[256];
+    int n = snprintf(body, sizeof body,
+                     "{\"version\":\"pc\",\"uptime_s\":%llu,\"players\":%d,\"joins\":%u"
+                     ",\"tick_avg_us\":%llu,\"tick_max_us\":%llu,\"late_ticks\":%u}",
+                     (unsigned long long)((now_ms() - stats.started_ms) / 1000), game_online(), stats.joins,
+                     (unsigned long long)(stats.ticks ? stats.tick_sum_us / stats.ticks : 0),
+                     (unsigned long long)stats.tick_max_us, stats.late_ticks);
+    http_reply(fd, "200 OK", "application/json", body, (size_t)n);
+}
+
 static void serve_file(sock_t fd, const char *url) {
     char path[512];
     if (!strcmp(url, "/")) url = "/index.html";
@@ -188,6 +215,10 @@ static int handle_http(int c) {
     char *key = strstr((char *)cl->in, "Sec-WebSocket-Key:");
     if (!key) key = strstr((char *)cl->in, "sec-websocket-key:");
 
+    if (!strcmp(url, "/status")) {
+        serve_status(cl->fd);
+        return 0;
+    }
     if (strcmp(url, "/ws") != 0 || !key) {
         serve_file(cl->fd, url);
         return 0;
@@ -218,6 +249,7 @@ static int handle_http(int c) {
         return 0;
     }
     slot_client[cl->slot] = c;
+    stats.joins++;
     printf("conexão %d entrou no slot %d\n", c, cl->slot);
     return 1;
 }
@@ -260,6 +292,8 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
+#else
+    signal(SIGPIPE, SIG_IGN); // jogador que caiu não pode derrubar o servidor junto
 #endif
     for (int i = 0; i < MAX_CLIENTS; i++) clients[i].fd = BAD_SOCK;
     for (int i = 0; i < MAX_PLAYERS; i++) slot_client[i] = -1;
@@ -281,6 +315,7 @@ int main(int argc, char **argv) {
     printf("Cananeia Deep Sea: abra http://localhost:%d (cliente em %s)\n", port, www);
     fflush(stdout);
 
+    stats.started_ms = now_ms();
     uint64_t next_tick = now_ms();
     for (;;) {
         fd_set rd;
@@ -321,7 +356,13 @@ int main(int argc, char **argv) {
         }
 
         if (now_ms() >= next_tick) {
+            if (now_ms() >= next_tick + 1000 / TICK_HZ) stats.late_ticks++; // chegou um tick atrasado
+            uint64_t t0 = now_us();
             game_tick();
+            uint64_t us = now_us() - t0;
+            stats.tick_sum_us += us;
+            stats.ticks++;
+            if (us > stats.tick_max_us) stats.tick_max_us = us;
             next_tick += 1000 / TICK_HZ;
             if (now_ms() > next_tick + 1000) next_tick = now_ms(); // ficou para trás demais
         }

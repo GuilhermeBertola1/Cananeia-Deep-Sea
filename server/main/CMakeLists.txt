@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.c" "wifi.c" "www.c"
                        INCLUDE_DIRS "."
-                       PRIV_REQUIRES game esp_http_server esp_wifi esp_eth esp_netif nvs_flash esp_psram)
+                       PRIV_REQUIRES game esp_http_server esp_wifi esp_eth esp_netif nvs_flash esp_psram esp_timer esp_app_format)
 
 # O cliente web (client/build/web) vai embutido no firmware: o ESP serve
 # a página direto da flash, sem sistema de arquivos.

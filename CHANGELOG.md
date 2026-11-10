@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0 (2026-11-10): lançamento
+
+- **Aguenta 8 jogadores no ESP32:** três jeitos de o servidor travar ou derrubar gente foram corrigidos
+  - Quem ficava parado pescando era desconectado quando alguém abria a página (o "LRU purge" do servidor HTTP fechava o socket mais quieto). Agora são 13 sockets, sem purge, e as páginas fecham a conexão logo depois de responder
+  - Um jogador com o Wi-Fi ruim travava o jogo de todos por até 5 s a cada envio. Agora o envio espera no máximo 1 s e, se falhar, só aquela conexão é fechada (o perfil é salvo)
+  - Celular que sumiu do Wi-Fi sem avisar segurava o slot para sempre. O keep-alive do TCP descobre em uns 20 s
+- **`/status`:** a saúde do servidor em JSON (versão, tempo ligado, jogadores, memória livre e a menor até agora, tick médio e mais lento, ticks atrasados, envios que falharam). No ESP32 ela também sai no monitor serial a cada minuto. O servidor do PC tem a mesma rota
+- **Robôs para o teste de carga** (`server\host\bots.exe`): N jogadores falsos (`robo1`, `robo2`...) entram, navegam, atiram e vendem sozinhos. A cada minuto mostram quantos estão jogando, as quedas, o maior buraco entre dois estados e o `/status`; no fim dizem se o teste passou
+- Servidor do PC no Linux/macOS: um jogador caindo não derruba mais o servidor junto (`SIGPIPE`)
+- O protocolo (versão 9) e os perfis não mudaram
+
 ## v0.9.0 (2026-11-10): água, luz, clima e sons
 
 - **Shader de água:** o mar balança (os `~` ondulam uns 2 px), a crista das ondas clareia e o sol brilha onde elas se somam. As ondas ficam presas ao mundo, não à tela
