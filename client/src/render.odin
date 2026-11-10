@@ -410,13 +410,19 @@ draw_effects :: proc(v: View) {
 	}
 }
 
+// Relâmpago aceso agora? ~1 a cada 10 s durante a tempestade, 1/4 s cada.
+// O sound.odin usa o mesmo sorteio para o trovão sair junto.
+lightning :: proc() -> bool {
+	return s.world.kind == WORLD_STORM && hash2(i32(rl.GetTime() * 4), 0, 77) % 40 == 0
+}
+
 // Céu: nuvens passando. Na tempestade, céu escuro, chuva caindo com o vento
 // e um relâmpago de vez em quando. A noite fica no light.odin.
 @(private = "file")
 draw_sky :: proc(v: View) {
 	drift := i32(rl.GetTime() * 2)
 	storm := s.world.kind == WORLD_STORM
-	flash := storm && hash2(i32(rl.GetTime() * 4), 0, 77) % 40 == 0 // relâmpago: ~1 a cada 10 s
+	flash := lightning()
 	rain: rune = '/' if s.world.dx > 0 else ('\\' if s.world.dx < 0 else '|')
 	for sy in 0 ..< v.rows {
 		for sx in 0 ..< v.cols {

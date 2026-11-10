@@ -222,7 +222,7 @@ draw_hud :: proc() {
 		text(target, x, y, 10, COLOR_ACCENT)
 		y += 14
 	}
-	text("M amplia o mapa", x, y, 10, COLOR_QUIET)
+	text("M amplia o mapa · N liga/desliga o som", x, y, 10, COLOR_QUIET)
 	y += 22
 
 	text("RANKING", x, y, 20, COLOR_QUIET)
