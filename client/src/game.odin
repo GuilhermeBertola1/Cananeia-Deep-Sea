@@ -79,6 +79,16 @@ World_Event :: struct {
 	dx, dy: i32, // vento da tempestade
 }
 
+// O boss no mar (kind = BOSS_NONE quando não tem). Vem para todo mundo, perto ou longe.
+Boss :: struct {
+	kind:       u8,
+	x, y:       i32,
+	radius:     i32, // o corpo: tiro a até `radius` células do centro acerta
+	hp, hp_max: int,
+	secs:       int, // segundos até ele ir embora
+	attack:     int, // ticks do ataque que está acontecendo (para desenhar)
+}
+
 Rank_Entry :: struct {
 	name_buf: [NAME_MAX_LEN]u8,
 	name:     string,
@@ -131,6 +141,8 @@ State :: struct {
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
 	at_mermaid:    bool, // perto da pedra da sereia
 	at_village:    bool, // no cais de uma vila: vende e conserta
+	grabbed:       bool, // preso por um tentáculo: não anda
+	mad:           bool, // louco perto do Cthulhu: o leme está invertido
 	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
 	reload:        int,  // ticks até poder atirar de novo
 	kills, deaths: int,
@@ -162,6 +174,7 @@ State :: struct {
 	predators:     [MAX_PREDATORS]Predator,
 	pred_count:    int,
 	world:         World_Event,
+	boss:          Boss,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
 	prices:        [FISH_COUNT]int,
@@ -844,6 +857,8 @@ read_state :: proc(r: ^Reader) {
 	s.safe = flags & STATE_SAFE != 0
 	s.at_mermaid = flags & STATE_AT_MERMAID != 0
 	s.at_village = flags & STATE_AT_VILLAGE != 0
+	s.grabbed = flags & STATE_GRABBED != 0
+	s.mad = flags & STATE_MAD != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))
@@ -892,4 +907,12 @@ read_state :: proc(r: ^Reader) {
 	ev.dx = i32(i8(read_u8(r)))
 	ev.dy = i32(i8(read_u8(r)))
 	if r.ok do s.world = ev
+
+	// Desde a v8: o boss.
+	bs := Boss{kind = read_u8(r), x = i32(read_u16(r)), y = i32(read_u16(r)), radius = i32(read_u8(r))}
+	bs.hp = int(read_u16(r))
+	bs.hp_max = int(read_u16(r))
+	bs.secs = int(read_u16(r))
+	bs.attack = int(read_u8(r))
+	if r.ok do s.boss = bs
 }

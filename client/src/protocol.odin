@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 7
+PROTOCOL_VERSION :: 8
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -77,9 +77,15 @@ EV_PREDATOR_HIT :: 34
 EV_PREDATOR_KILL :: 35
 EV_WORLD_START :: 36
 EV_WORLD_END :: 37
+EV_BOSS_START :: 38
+EV_BOSS_HIT :: 39
+EV_BOSS_END :: 40
+EV_BOSS_REWARD :: 41
 
-// No EV_DIED e no EV_HURT, quem atacou: id do jogador ou KILLER_PREDATOR + tipo do bicho.
+// No EV_DIED e no EV_HURT, quem atacou: id do jogador, KILLER_PREDATOR + tipo do bicho
+// ou KILLER_BOSS + tipo do boss.
 KILLER_PREDATOR :: 0x80
+KILLER_BOSS :: 0xA0
 PRED_SHARK :: 0
 PRED_GHOST :: 1
 
@@ -87,6 +93,11 @@ WORLD_NONE :: 0
 WORLD_STORM :: 1
 WORLD_SQUID :: 2
 WORLD_GHOST :: 3
+
+BOSS_NONE :: 0
+BOSS_MEGALODON :: 1
+BOSS_KRAKEN :: 2
+BOSS_CTHULHU :: 3
 
 MARK_SCHOOL :: 1
 MARK_BAG :: 2
@@ -98,6 +109,8 @@ STATE_BROKEN :: 1 << 1
 STATE_SAFE :: 1 << 2
 STATE_AT_MERMAID :: 1 << 3
 STATE_AT_VILLAGE :: 1 << 4
+STATE_GRABBED :: 1 << 5 // preso por um tentáculo
+STATE_MAD :: 1 << 6 // louco perto do Cthulhu: o leme está invertido
 
 MERMAID_TALK :: 0
 MERMAID_GIVE_UP :: 1

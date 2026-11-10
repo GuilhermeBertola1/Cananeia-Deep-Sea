@@ -569,6 +569,8 @@ static int near(int x, int y, int ox, int oy, int extra) {
            dy <= VIEW_RADIUS + extra;
 }
 
+static int is_mad(const player_t *p); // na seção dos bosses
+
 static void send_state(int slot) {
     const player_t *p = &g.players[slot];
     const profile_t *pr = prof(p);
@@ -583,7 +585,8 @@ static void send_state(int slot) {
     put_u8(&w, p->vel);
     put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
                    (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0) |
-                   (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0));
+                   (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0) | (p->grabbed ? STATE_GRABBED : 0) |
+                   (is_mad(p) ? STATE_MAD : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
     put_u8(&w, p->reload);
@@ -659,6 +662,18 @@ static void send_state(int slot) {
     put_u16(&w, (uint16_t)(ev->kind && ev->ends > g.tick ? (ev->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     put_u8(&w, (uint8_t)ev->dx);
     put_u8(&w, (uint8_t)ev->dy);
+
+    // Desde a v8: o boss. Vai para todo mundo, perto ou longe, para a barra de
+    // vida aparecer na tela de quem está indo ajudar.
+    const boss_t *b = &g.boss;
+    put_u8(&w, b->kind);
+    put_u16(&w, (uint16_t)b->x);
+    put_u16(&w, (uint16_t)b->y);
+    put_u8(&w, b->kind ? BOSSES[b->kind].r : 0);
+    put_u16(&w, (uint16_t)(b->hp > 0 ? b->hp : 0));
+    put_u16(&w, (uint16_t)b->hp_max);
+    put_u16(&w, (uint16_t)(b->kind && b->ends > g.tick ? (b->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
+    put_u8(&w, b->attack);
     send_w(slot, &w);
 }
 
