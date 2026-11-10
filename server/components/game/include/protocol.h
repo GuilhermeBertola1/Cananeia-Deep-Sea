@@ -51,9 +51,12 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_COMBINED = 31, EV_CANT_COMBINE = 32,
        EV_BITTEN = 33, EV_PREDATOR_HIT = 34, EV_PREDATOR_KILL = 35,
        EV_WORLD_START = 36, EV_WORLD_END = 37,
-       EV_BOSS_START = 38, EV_BOSS_HIT = 39, EV_BOSS_END = 40, EV_BOSS_REWARD = 41 };
+       EV_BOSS_START = 38, EV_BOSS_HIT = 39, EV_BOSS_END = 40, EV_BOSS_REWARD = 41,
+       EV_WEATHER = 42 };
 // Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
 enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2, WORLD_GHOST = 3 };
+// Clima, no mapa todo (no EV_WEATHER, `espécie` é o clima novo e `quantidade`, os segundos).
+enum { WEATHER_CLEAR = 0, WEATHER_RAIN = 1, WEATHER_FOG = 2 };
 // Tipos de bicho (no EV_BITTEN, EV_PREDATOR_* e somados a KILLER_PREDATOR).
 enum { PRED_SHARK = 0, PRED_GHOST = 1 };
 // Bosses (no EV_BOSS_*, `espécie` é o tipo).
