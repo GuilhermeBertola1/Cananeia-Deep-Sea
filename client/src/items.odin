@@ -12,6 +12,7 @@ AFFIX_NONE :: 0xFF
 RARITY_LEGENDARY :: 3
 ENCHANT_MAX :: 3
 ITEM_NONE :: 0
+ITEM_DENTE :: 11 // a primeira arma única (as de boss vêm depois de todos os outros itens)
 
 Item :: struct {
 	base:     u8, // ITEM_NONE = slot vazio
@@ -34,6 +35,9 @@ ITEM_NAMES := [?]string {
 	"Casco reforçado",
 	"Amuleto de búzios",
 	"Isca encantada",
+	"Dente do Megalodon",
+	"Tentáculo do Kraken",
+	"Cajado de R'lyeh",
 }
 
 AFFIX_NAMES := [?]string{"Veloz", "Robusto", "Afiado", "do Pescador", "da Sorte"}
@@ -62,6 +66,11 @@ combine_rarity :: proc(a, b: Item) -> u8 {
 	return r
 }
 
+// Arma única de boss: sempre lendária, nunca sai de baú.
+item_is_unique :: proc(base: u8) -> bool {
+	return base >= ITEM_DENTE && int(base) < len(ITEM_NAMES)
+}
+
 item_name :: proc(base: u8) -> string {
 	return ITEM_NAMES[base] if int(base) < len(ITEM_NAMES) else "?"
 }
@@ -72,6 +81,13 @@ affix_name :: proc(id: u8) -> string {
 
 rarity_name :: proc(r: u8) -> string {
 	return RARITY_NAMES[r] if int(r) < len(RARITY_NAMES) else "?"
+}
+
+// Cor do item na lista: a da raridade, ou vermelho-dourado na arma única.
+COLOR_UNIQUE :: rl.Color{255, 110, 80, 255}
+
+item_color :: proc(it: Item) -> rl.Color {
+	return COLOR_UNIQUE if item_is_unique(it.base) else rarity_color(it.rarity)
 }
 
 rarity_color :: proc(r: u8) -> rl.Color {

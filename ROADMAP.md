@@ -5,14 +5,14 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 ## Como fazer cada nova versão
 
 1. Atualize o código: `git checkout main && git pull`.
-2. Crie um branch para a versão: `git checkout -b v0.8-bosses`.
+2. Crie um branch para a versão: `git checkout -b v0.9-polimento`.
 3. Um commit por passo, no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português: `tipo(escopo): descrição`. Exemplos: `feat(pesca): rede pega dois peixes por vez`, `fix(rede): ignorar mensagem curta`. Tipos: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`, `perf`. Escopos comuns: `cliente`, `servidor`, `esp32`, `protocolo`, `mapa`, `pesca`, `loja`.
 4. Se mudar mensagens da rede, atualize **os dois lados** (`protocol.h` e `protocol.odin`), o `docs/protocol.md` e aumente `PROTOCOL_VERSION`.
 5. Se mudar a geração do mapa, mude `world.c` **e** `world.odin` juntos. O checksum no `S_WELCOME` acusa se ficaram diferentes.
 6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e, quando der, no ESP32.
 7. Escreva o que mudou no `CHANGELOG.md`.
 8. Abra um Pull Request no GitHub. O Bertola revisa o código antes de qualquer merge na `main`.
-9. Crie a tag da versão: `git tag v0.8.0 && git push --tags`.
+9. Crie a tag da versão: `git tag v0.9.0 && git push --tags`.
 10. Campo novo no `profile_t` vai sempre no fim, e o `profile_upgrade` em `storage.h` aprende a converter o perfil da versão anterior. Assim ninguém perde a conta.
 
 ## Visão geral
@@ -26,8 +26,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.5 | Armas, PvP, morte e drops (bag e coroa) | Pronta |
 | v0.6 | Sereia, mercenário e mecânico | Pronta |
 | v0.7 | Ecossistema: cardumes dinâmicos e eventos do mundo | Pronta |
-| v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | Próxima |
-| v0.9 | Shaders de água, luz e clima; polimento | |
+| v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | Pronta |
+| v0.9 | Shaders de água, luz e clima; polimento | Próxima |
 | v1.0 | Lançamento | |
 
 ---
@@ -109,11 +109,18 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 
 **Pronta quando:** pescar muito numa região baixa a barra de peixe e ela volta com o tempo; um barco novo longe do porto é caçado por tubarões; e um grupo afunda o navio fantasma e divide o tesouro.
 
-## v0.8: Bosses
+## v0.8: Bosses (pronta)
 
-- [ ] Cthulhu, Megalodon e Kraken aparecem como eventos anunciados para todos
-- [ ] Vida compartilhada; dano de vários jogadores
-- [ ] Drop de dinheiro + arma única de cada boss
+**Objetivo:** de tempos em tempos o servidor inteiro tem um motivo para se juntar.
+
+- [x] Cthulhu, Megalodon e Kraken aparecem como eventos anunciados para todos, numa agenda separada dos eventos do mundo
+- [x] Cada um com um ataque próprio: investida (Megalodon), tentáculos que agarram e puxam (Kraken), anel de tiros e loucura que inverte o leme (Cthulhu)
+- [x] Vida compartilhada que cresce com os jogadores online; dano de vários jogadores somado
+- [x] Drop de dinheiro dividido pelo dano + arma única de cada boss para quem mais bateu
+- [x] Armas únicas com poder especial: Dente (conserta o barco), Tentáculo (prende), Cajado (tiro em leque)
+- [x] Perfis da v0.7 continuam valendo (o `profile_t` não mudou)
+
+**Pronta quando:** dois jogadores afundam um boss juntos, os dois veem a mesma barra de vida caindo, o prêmio sai dividido pelo dano e quem bateu mais encontra a arma única no inventário.
 
 ## v0.9: Shaders e polimento
 

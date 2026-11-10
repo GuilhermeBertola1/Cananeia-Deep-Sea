@@ -24,6 +24,18 @@ COLOR_MERMAID :: rl.Color{255, 159, 243, 255}
 COLOR_VILLAGE :: rl.Color{150, 230, 140, 255}
 COLOR_SHARK :: rl.Color{190, 200, 214, 255}
 COLOR_GHOST :: rl.Color{150, 255, 190, 255}
+COLOR_MEGALODON :: rl.Color{140, 170, 200, 255}
+COLOR_KRAKEN :: rl.Color{220, 100, 170, 255}
+COLOR_CTHULHU :: rl.Color{110, 230, 150, 255}
+
+// Iguais ao game.c, só para desenhar.
+KRAKEN_REACH :: 12 // alcance dos tentáculos
+CTHULHU_MADNESS_R :: 15 // raio da loucura
+
+// Desenho de cada boss, linha por linha, com o centro do corpo na linha do meio.
+MEGALODON_ART := [3]string{`   _/|_   `, `<o======<<`, `   '\|'   `}
+KRAKEN_ART := [4]string{` .-""-. `, `( o  o )`, ` )(||)( `, `/ /||\ \`}
+CTHULHU_ART := [5]string{`  _____  `, ` ( o o ) `, ` /|||||\ `, `/ ||||| \`, `  /   \  `}
 
 PLAYER_COLORS := [6]rl.Color {
 	{255, 107, 107, 255},
@@ -134,6 +146,7 @@ draw_world :: proc() {
 		case .Marine_Life:
 			draw_schools(v)
 			draw_predators(v)
+			draw_boss(v)
 		case .Boats:
 			draw_boats(v)
 		case .Effects:
@@ -248,6 +261,59 @@ draw_predators :: proc(v: View) {
 			glyph(sx, sy, '^', COLOR_SHARK)
 		}
 		if p.hp_pct < 100 do draw_hp_bar(v, p.x, p.y, p.hp_pct)
+	}
+}
+
+@(private = "file")
+boss_art :: proc(kind: u8) -> []string {
+	switch kind {
+	case BOSS_MEGALODON: return MEGALODON_ART[:]
+	case BOSS_KRAKEN: return KRAKEN_ART[:]
+	case BOSS_CTHULHU: return CTHULHU_ART[:]
+	}
+	return nil
+}
+
+// O boss: o desenho, o nome em cima e, no Kraken, os tentáculos até os barcos
+// ao alcance. Perto do Cthulhu o mar fica esverdeado: é a área da loucura.
+// Atacando (investida, tentáculos, anel), o desenho fica vermelho.
+@(private = "file")
+draw_boss :: proc(v: View) {
+	b := s.boss
+	if b.kind == BOSS_NONE do return
+	if b.kind == BOSS_CTHULHU {
+		alpha := u8(28 + 14 * math.sin(rl.GetTime() * 3))
+		for y in b.y - CTHULHU_MADNESS_R ..= b.y + CTHULHU_MADNESS_R {
+			for x in b.x - CTHULHU_MADNESS_R ..= b.x + CTHULHU_MADNESS_R {
+				dx, dy := x - b.x, y - b.y
+				if dx * dx + dy * dy > CTHULHU_MADNESS_R * CTHULHU_MADNESS_R do continue
+				sx, sy := in_view(v, x, y) or_continue
+				rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, {COLOR_CTHULHU.r, COLOR_CTHULHU.g, COLOR_CTHULHU.b, alpha})
+			}
+		}
+	}
+	if b.kind == BOSS_KRAKEN && b.attack > 0 {
+		draw_tentacle(v, b, s.x, s.y)
+		for o in s.boats[:s.boat_count] do draw_tentacle(v, b, o.x, o.y)
+	}
+	color := boss_color(b.kind)
+	if b.attack > 0 do color = {255, 107, 107, 255}
+	art := boss_art(b.kind)
+	top := b.y - i32(len(art) / 2)
+	for line, i in art do draw_shape(v, b.x, top + i32(i), line, color)
+	draw_label(v, b.x, top - 1, boss_name(b.kind), boss_color(b.kind))
+}
+
+// Um tentáculo do Kraken até (x, y), se estiver ao alcance. O servidor agarra
+// só os 3 mais perto, mas aqui desenha em todos: no meio da luta dá no mesmo.
+@(private = "file")
+draw_tentacle :: proc(v: View, b: Boss, x, y: i32) {
+	dx, dy := x - b.x, y - b.y
+	if dx * dx + dy * dy > KRAKEN_REACH * KRAKEN_REACH do return
+	steps := max(abs(dx), abs(dy))
+	for i in 1 ..< steps {
+		sx, sy := in_view(v, b.x + dx * i / steps, b.y + dy * i / steps) or_continue
+		glyph(sx, sy, '~' if i % 2 == 0 else 's', COLOR_KRAKEN)
 	}
 }
 

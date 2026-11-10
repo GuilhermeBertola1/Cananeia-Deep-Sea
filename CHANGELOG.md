@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.8.0 (2026-11-10): bosses e armas únicas
+
+- **Bosses**, um por vez, numa agenda própria (pode coincidir com uma tempestade): o primeiro entre 10 e 20 minutos e depois um a cada 20 a 40 minutos, anunciados para todos. Ficam 5 minutos no mar; se ninguém afundar, voltam para o fundo
+  - **Megalodon** (45%): só em água funda, persegue o barco mais perto e, a 12 células, dá uma investida rápida que morde 25 de vida
+  - **Kraken** (35%): fica parado e, a cada 3 s, os tentáculos agarram os 3 barcos mais perto (até 12 células), tiram 12 de vida, puxam e prendem por 2 s. Canhão e mosquete batem de fora do alcance
+  - **Cthulhu** (20%): lento, vai em qualquer água e solta um anel de 8 tiros a cada 5 s. A até 15 células dele o leme fica invertido
+- **Vida compartilhada:** cresce com o número de jogadores online quando o boss aparece, e todo mundo vê a mesma barra no alto da tela
+- **Prêmio:** $1500, $2500 ou $5000, divididos pelo dano de cada um. Quem mais bateu leva a **arma única** do boss (com a bolsa cheia, passa para o seguinte), e quem deu pelo menos 10% do dano ganha um baú
+- **Armas únicas**, sempre lendárias, que não saem de baú e o mecânico não combina:
+  - **Dente do Megalodon:** conserta o seu barco com 25% do dano que causa
+  - **Tentáculo do Kraken:** prende o alvo (barco, bicho ou boss) parado por 2 s
+  - **Cajado de R'lyeh:** atira 3 tiros em leque
+- Tela: os três bosses desenhados em ASCII (vermelhos quando atacam), tentáculos até os barcos, área da loucura esverdeada, boss no minimapa e no painel, avisos "Preso!" e "Loucura!", e alcance, recarga e poder das armas no inventário
+- Para testar sem esperar, compile o servidor com `BOSS_FIRST=100` (o primeiro boss vem em 10 a 20 s)
+- Protocolo versão 8: o boss no `S_STATE` (para todos, perto ou longe), flags "preso" e "louco", eventos 38 a 41 e os ids `0xA1` a `0xA3` de quem atacou
+- Os perfis da v0.7 continuam valendo sem conversão, porque o `profile_t` não mudou
+
 ## v0.7.0 (2026-11-09): ecossistema, vilas, tubarões e eventos do mundo
 
 - **Estoque de peixe por região:** o mar é dividido em regiões de 32x32 células. Pescar esvazia a região, a pesca rende menos quando ela está vazia e o peixe volta sozinho com o tempo (de vazia a cheia em uns 6 minutos). Cardumes aparecem mais onde tem peixe e vão embora quando a região cai abaixo de 20%

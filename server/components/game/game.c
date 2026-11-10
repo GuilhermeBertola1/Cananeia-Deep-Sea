@@ -82,6 +82,41 @@
 #define GHOST_SHOT_SPEED 2
 #define GHOST_BOUNTY_CENTS 30000   // $300 divididos entre quem acertou
 
+// Poderes das armas únicas (weapon_t.fx).
+#define LEECH_PCT 25          // Dente: % do dano que volta como conserto
+#define GRAB_TICKS (2 * TICK_HZ) // Tentáculo: tempo que o alvo fica preso
+
+// Bosses: um por vez, numa agenda própria (pode coincidir com tempestade e afins).
+// Para testar, compile com -DBOSS_FIRST=100 (o primeiro vem em 10 s).
+#ifndef BOSS_FIRST
+#define BOSS_FIRST (10 * 60 * TICK_HZ) // o primeiro vem entre 10 e 20 min
+#endif
+#define BOSS_GAP (20 * 60 * TICK_HZ)   // depois, um a cada 20 a 40 min
+#define BOSS_TIME (5 * 60 * TICK_HZ)   // tempo para afundar o boss antes que ele vá embora
+#define BOSS_MIN_DIST 60               // longe do porto
+#define BOSS_SENSE 25                  // de quantas células ele vê um barco
+#define BOSS_HELPER_PCT 10             // quem deu 10% do dano ganha um baú
+
+#define MEGA_SPEED 5          // células por segundo, nadando
+#define MEGA_CHARGE_SPEED 12  // na investida: nenhum barco foge
+#define MEGA_CHARGE_FROM 12   // começa a investida a essa distância
+#define MEGA_CHARGE_TIME (2 * TICK_HZ)
+#define MEGA_REST (4 * TICK_HZ) // depois de morder (ou errar), descansa
+#define MEGA_BITE 25
+
+#define KRAKEN_REACH 12              // alcance dos tentáculos: canhão (18) e mosquete (14) batem de fora
+#define KRAKEN_ARMS 3                // quantos barcos ele agarra de uma vez
+#define KRAKEN_EVERY (3 * TICK_HZ)   // um ataque a cada 3 s
+#define KRAKEN_DAMAGE 12
+#define KRAKEN_PULL 2                // células que o tentáculo puxa o barco para perto
+
+#define CTHULHU_SPEED 2                // células por segundo: lento, mas vai em qualquer água
+#define CTHULHU_RING_EVERY (5 * TICK_HZ) // a cada 5 s, um anel de 8 tiros
+#define CTHULHU_RING_DAMAGE 12
+#define CTHULHU_RING_RANGE 16
+#define CTHULHU_RING_SPEED 2
+#define CTHULHU_MADNESS_R 15           // perto dele, o leme fica invertido
+
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
@@ -117,6 +152,7 @@ typedef struct {
     uint8_t move_budget; // em décimos de célula
     uint8_t blocked;
     uint8_t reload;
+    uint8_t grabbed;    // ticks que ainda fica preso pelo Tentáculo do Kraken
     uint32_t next_spin; // tick em que a roleta da sereia libera de novo
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
@@ -137,6 +173,7 @@ typedef struct {
     int32_t x, y;        // em 1/SUB de célula
     int32_t ux, uy;      // um passo de 1 célula na direção do tiro, em 1/SUB
     uint16_t damage;
+    uint8_t fx;          // poder da arma que atirou (weapon_fx_t)
 } shot_t;
 
 // Bag ou coroa boiando no mar, esperando alguém passar por cima.
@@ -161,6 +198,7 @@ typedef struct {
     uint8_t heading;     // para onde nada quando só está passeando (0 a 7)
     uint8_t move_budget; // em décimos de célula, igual ao barco
     uint8_t bite;        // ticks até poder morder de novo
+    uint8_t grabbed;     // ticks que ainda fica preso pelo Tentáculo
 } predator_t;
 
 // O evento do mundo que está acontecendo agora (só um por vez).
@@ -170,6 +208,34 @@ typedef struct {
     int8_t dx, dy; // para onde sopra o vento da tempestade
     uint32_t ends; // tick em que acaba
 } world_event_t;
+
+// Cada boss: vida (base + um tanto por jogador online), tamanho, prêmio e arma única.
+typedef struct {
+    uint16_t hp_base, hp_per_player;
+    uint8_t r; // raio do corpo: o tiro acerta a até r células do centro
+    uint32_t bounty_cents;
+    uint8_t weapon;
+} boss_info_t;
+
+static const boss_info_t BOSSES[BOSS_COUNT] = {
+    [BOSS_MEGALODON] = {600, 300, 2, 150000, ITEM_DENTE},
+    [BOSS_KRAKEN] = {900, 450, 3, 250000, ITEM_TENTACULO},
+    [BOSS_CTHULHU] = {1500, 600, 4, 500000, ITEM_CAJADO},
+};
+
+typedef struct {
+    uint8_t kind;        // BOSS_* (BOSS_NONE = nenhum no mar)
+    int16_t x, y;
+    int16_t hp, hp_max;
+    int8_t target;       // slot do barco que ele persegue (-1 = nenhum)
+    uint8_t heading;     // para onde nada sem alvo (0 a 7)
+    uint8_t move_budget; // em décimos de célula
+    uint8_t grabbed;     // preso pelo Tentáculo (sim, até o boss)
+    uint8_t attack;      // ticks de ataque: investida do Megalodon, tentáculos do Kraken, anel do Cthulhu
+    uint8_t rest;        // ticks até poder atacar de novo
+    uint32_t ends;       // tick em que vai embora
+    uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
+} boss_t;
 
 enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
 
@@ -199,6 +265,8 @@ static struct {
     uint32_t next_event; // tick em que começa o próximo evento
     int ghost;           // índice do navio fantasma em `predators` (-1 = não tem)
     uint16_t ghost_dmg[MAX_PLAYERS]; // dano que cada slot deu nele
+    boss_t boss;
+    uint32_t next_boss; // tick em que aparece o próximo boss
 } g;
 
 static uint8_t out[1024];
@@ -501,6 +569,8 @@ static int near(int x, int y, int ox, int oy, int extra) {
            dy <= VIEW_RADIUS + extra;
 }
 
+static int is_mad(const player_t *p); // na seção dos bosses
+
 static void send_state(int slot) {
     const player_t *p = &g.players[slot];
     const profile_t *pr = prof(p);
@@ -515,7 +585,8 @@ static void send_state(int slot) {
     put_u8(&w, p->vel);
     put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
                    (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0) |
-                   (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0));
+                   (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0) | (p->grabbed ? STATE_GRABBED : 0) |
+                   (is_mad(p) ? STATE_MAD : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
     put_u8(&w, p->reload);
@@ -591,6 +662,18 @@ static void send_state(int slot) {
     put_u16(&w, (uint16_t)(ev->kind && ev->ends > g.tick ? (ev->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
     put_u8(&w, (uint8_t)ev->dx);
     put_u8(&w, (uint8_t)ev->dy);
+
+    // Desde a v8: o boss. Vai para todo mundo, perto ou longe, para a barra de
+    // vida aparecer na tela de quem está indo ajudar.
+    const boss_t *b = &g.boss;
+    put_u8(&w, b->kind);
+    put_u16(&w, (uint16_t)b->x);
+    put_u16(&w, (uint16_t)b->y);
+    put_u8(&w, b->kind ? BOSSES[b->kind].r : 0);
+    put_u16(&w, (uint16_t)(b->hp > 0 ? b->hp : 0));
+    put_u16(&w, (uint16_t)b->hp_max);
+    put_u16(&w, (uint16_t)(b->kind && b->ends > g.tick ? (b->ends - g.tick + TICK_HZ - 1) / TICK_HZ : 0));
+    put_u8(&w, b->attack);
     send_w(slot, &w);
 }
 
@@ -625,10 +708,10 @@ static int bag_add(profile_t *pr, item_t item) {
     return -1;
 }
 
-// Baú: um item aleatório de qualquer tipo.
+// Baú: um item aleatório de qualquer tipo (menos as armas únicas dos bosses).
 static void give_random_item(int slot) {
     player_t *p = &g.players[slot];
-    item_t item = item_new((uint8_t)(1 + rnd_below(ITEM_BASE_COUNT - 1)), rnd());
+    item_t item = item_new((uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1)), rnd());
     if (bag_add(prof(p), item) < 0) {
         send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0);
         return;
@@ -916,7 +999,11 @@ static void combine(int slot, uint8_t a, uint8_t b) {
     profile_t *pr = prof(p);
     if (!at_dock(p) || a >= BAG_SIZE || b >= BAG_SIZE || a == b) return;
     item_t ia = pr->bag[a], ib = pr->bag[b];
-    if (ia.base == ITEM_NONE || ia.base != ib.base) { send_event(slot, EV_CANT_COMBINE, FISH_NONE, 0, 0); return; }
+    // Arma única não se combina: já é lendária e não existe outra igual.
+    if (ia.base == ITEM_NONE || ia.base != ib.base || item_is_unique(ia.base)) {
+        send_event(slot, EV_CANT_COMBINE, FISH_NONE, 0, 0);
+        return;
+    }
 
     uint8_t ra = item_info(ia).rarity, rb = item_info(ib).rarity;
     uint8_t want = ra > rb ? ra : rb;
@@ -980,7 +1067,8 @@ static const weapon_t *weapon(const player_t *p) {
 
 // Um tiro de (x, y) na direção de (tx, ty). Serve para os barcos e para o
 // navio fantasma. Devolve 0 se não saiu (mira em cima de si ou mar lotado de tiros).
-static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed, uint8_t range, uint16_t damage) {
+static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed, uint8_t range, uint16_t damage,
+                      uint8_t fx) {
     int dx = tx - x, dy = ty - y;
     uint32_t len = isqrt((uint32_t)(dx * dx + dy * dy));
     if (len == 0) return 0;
@@ -997,6 +1085,7 @@ static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed
             .ux = dx * SUB / (int32_t)len,
             .uy = dy * SUB / (int32_t)len,
             .damage = damage,
+            .fx = fx,
         };
         return 1;
     }
@@ -1009,7 +1098,28 @@ static void fire(int slot, int tx, int ty) {
     if (!wp || p->reload) return;
     if (in_safe_zone(p->x, p->y)) { send_event(slot, EV_SAFE_ZONE, FISH_NONE, 0, 0); return; }
     uint16_t damage = (uint16_t)(p->stats[STAT_DAMAGE] > 1 ? p->stats[STAT_DAMAGE] : 1);
-    if (spawn_shot((uint8_t)slot, p->x, p->y, tx, ty, wp->speed, wp->range, damage)) p->reload = wp->reload;
+    if (!spawn_shot((uint8_t)slot, p->x, p->y, tx, ty, wp->speed, wp->range, damage, wp->fx)) return;
+    p->reload = wp->reload;
+    if (wp->fx == FX_SPREAD) {
+        // Cajado: mais dois tiros, um de cada lado. Mirar em (4 * dx - dy, 4 * dy + dx)
+        // abre uns 14 graus sem precisar de seno nem cosseno.
+        int dx = tx - p->x, dy = ty - p->y;
+        spawn_shot((uint8_t)slot, p->x, p->y, p->x + 4 * dx - dy, p->y + 4 * dy + dx, wp->speed, wp->range, damage, wp->fx);
+        spawn_shot((uint8_t)slot, p->x, p->y, p->x + 4 * dx + dy, p->y + 4 * dy - dx, wp->speed, wp->range, damage, wp->fx);
+    }
+}
+
+// Dente do Megalodon: quem acertou conserta o próprio barco com parte do dano.
+static void leech(int shooter, int dmg) {
+    if (shooter < 0) return;
+    player_t *p = &g.players[shooter];
+    profile_t *pr = prof(p);
+    int heal = dmg * LEECH_PCT / 100;
+    if (heal < 1) heal = 1;
+    if (heal > pr->damage) heal = pr->damage;
+    if (!heal) return;
+    pr->damage = (uint16_t)(pr->damage - heal);
+    update_stats(p); // saiu de "avariado" se estava
 }
 
 // Joga um saque no mar, numa célula de água perto de (x, y). Com o mar
@@ -1051,6 +1161,7 @@ static void die(int slot, int killer) {
     pr->damage = 0;
     p->vel = 0;
     p->move_budget = 0;
+    p->grabbed = 0;
     find_spawn(p);
     update_stats(p);
     storage_save(p->profile, pr);
@@ -1070,6 +1181,8 @@ static void hit(int target, shot_t *sh) {
     int dmg = sh->damage;
     int shooter = sh->owner < MAX_PLAYERS && g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pr->damage = (uint16_t)(pr->damage + dmg > hp_max(t) ? hp_max(t) : pr->damage + dmg);
+    if (sh->fx == FX_LEECH) leech(shooter, dmg);
+    if (sh->fx == FX_GRAB) t->grabbed = GRAB_TICKS, t->vel = 0;
     send_event(target, EV_HURT, sh->owner, (uint16_t)dmg, (uint32_t)hp(t));
     if (shooter >= 0) send_event(shooter, EV_HIT, (uint8_t)target, (uint16_t)dmg, (uint32_t)hp(t));
     // Vida 0 por tiro é morte (na costa continua sendo só avaria).
@@ -1122,6 +1235,8 @@ static void update_drops(void) {
 static void hit_predator(predator_t *pd, const shot_t *sh) {
     int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pd->hp = (int16_t)(pd->hp - sh->damage);
+    if (sh->fx == FX_LEECH) leech(shooter, sh->damage);
+    if (sh->fx == FX_GRAB) pd->grabbed = GRAB_TICKS;
     if (pd->kind == PRED_GHOST && shooter >= 0) g.ghost_dmg[shooter] += sh->damage;
     if (pd->hp > 0) {
         if (shooter >= 0) send_event(shooter, EV_PREDATOR_HIT, pd->kind, sh->damage, (uint32_t)pd->hp);
@@ -1134,6 +1249,8 @@ static void hit_predator(predator_t *pd, const shot_t *sh) {
     send_event(shooter, EV_PREDATOR_KILL, pd->kind, 0, SHARK_BOUNTY_CENTS);
     send_rank(-1);
 }
+
+static int hit_boss(const shot_t *sh, int cx, int cy);
 
 // O tiro anda uma célula por vez (até `speed` por tick), para não pular
 // por cima de um barco. Some ao bater num barco, na terra ou no fim do alcance.
@@ -1153,7 +1270,8 @@ static void update_shots(void) {
                 sh->alive = 0;
                 break;
             }
-            // Tiro de bicho não acerta bicho.
+            // Tiro de bicho não acerta bicho nem boss.
+            if (sh->alive && sh->owner < MAX_PLAYERS && hit_boss(sh, cx, cy)) { sh->alive = 0; break; }
             for (int k = 0; sh->alive && sh->owner < MAX_PLAYERS && k < MAX_PREDATORS; k++) {
                 predator_t *pd = &g.predators[k];
                 if (!pd->alive || pd->y != cy || pd->x < cx - 1 || pd->x > cx + 1) continue;
@@ -1181,6 +1299,7 @@ static int is_prey(const player_t *p) {
 
 // Um passo de uma célula; na diagonal, desliza pela beira como o barco.
 static int pred_step(predator_t *pd, int dx, int dy) {
+    if (pd->grabbed) return 0; // preso pelo Tentáculo
     if (pred_water(pd, pd->x + dx, pd->y + dy)) return pd->x += dx, pd->y += dy, 1;
     if (dx && dy && pred_water(pd, pd->x + dx, pd->y)) return pd->x += dx, 1;
     if (dx && dy && pred_water(pd, pd->x, pd->y + dy)) return pd->y += dy, 1;
@@ -1240,7 +1359,7 @@ static void update_ghost(predator_t *pd) {
     // `bite` serve de recarga do canhão.
     if (prey && !pd->bite && !far_from(prey->x, prey->y, pd->x, pd->y, GHOST_RANGE + 1)) {
         if (spawn_shot(KILLER_PREDATOR + PRED_GHOST, pd->x, pd->y, prey->x, prey->y, GHOST_SHOT_SPEED, GHOST_RANGE + 2,
-                       GHOST_DAMAGE))
+                       GHOST_DAMAGE, FX_NONE))
             pd->bite = GHOST_RELOAD;
     }
 }
@@ -1251,6 +1370,7 @@ static void update_predators(void) {
         predator_t *pd = &g.predators[i];
         if (!pd->alive) continue;
         if (pd->bite) pd->bite--;
+        if (pd->grabbed) pd->grabbed--;
         if (pd->kind == PRED_GHOST) { update_ghost(pd); continue; }
         alive++;
         // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
@@ -1424,11 +1544,264 @@ static void storm(int slot) {
     }
 }
 
+// --- bosses -------------------------------------------------------------------
+
+// O Megalodon só nada no fundo; nenhum boss entra em zona segura.
+static int boss_water(int x, int y) {
+    tile_t t = tile(x, y);
+    int ok = g.boss.kind == BOSS_CTHULHU ? tile_is_water(t) : t == TILE_DEEP;
+    return ok && !in_safe_zone(x, y);
+}
+
+static int boss_step(int dx, int dy) {
+    boss_t *b = &g.boss;
+    if (b->grabbed) return 0;
+    if (boss_water(b->x + dx, b->y + dy)) return b->x += dx, b->y += dy, 1;
+    if (dx && dy && boss_water(b->x + dx, b->y)) return b->x += dx, 1;
+    if (dx && dy && boss_water(b->x, b->y + dy)) return b->y += dy, 1;
+    return 0;
+}
+
+// Anda `speed` células por segundo atrás do alvo, ou passeando se não tem.
+static void boss_swim(const player_t *prey, int speed) {
+    boss_t *b = &g.boss;
+    b->move_budget += speed;
+    while (b->move_budget >= 10) {
+        b->move_budget -= 10;
+        if (prey) {
+            if (iabs(prey->x - b->x) <= 1 && iabs(prey->y - b->y) <= 1) break; // já está em cima
+            boss_step((prey->x > b->x) - (prey->x < b->x), (prey->y > b->y) - (prey->y < b->y));
+        } else if (!boss_step(DIR_X[b->heading], DIR_Y[b->heading]) || rnd_below(10) == 0) {
+            b->heading = (uint8_t)rnd_below(8);
+        }
+    }
+}
+
+// Dano do boss num barco. Igual tiro: com vida 0, afunda.
+static void boss_hurt(int slot, int dmg) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    pr->damage = (uint16_t)(pr->damage + dmg > hp_max(p) ? hp_max(p) : pr->damage + dmg);
+    update_stats(p);
+    send_event(slot, EV_HURT, (uint8_t)(KILLER_BOSS + g.boss.kind), (uint16_t)dmg, (uint32_t)hp(p));
+    if (hp(p) == 0) die(slot, KILLER_BOSS + g.boss.kind);
+}
+
+// O barco mais perto, fora da zona segura, até `range` células. -1 se nenhum.
+static int boss_nearest(int range) {
+    int best = range * range + 1, found = -1;
+    for (int t = 0; t < MAX_PLAYERS; t++) {
+        const player_t *p = &g.players[t];
+        int dx = p->x - g.boss.x, dy = p->y - g.boss.y;
+        if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
+            best = dx * dx + dy * dy, found = t;
+    }
+    return found;
+}
+
+// Megalodon: nada atrás do barco mais perto e, chegando a 12 células, dá uma
+// investida rápida demais para fugir. Se morder, tira 25; depois descansa.
+static void update_megalodon(void) {
+    boss_t *b = &g.boss;
+    if (b->target >= 0) {
+        const player_t *t = &g.players[b->target];
+        if (t->state != SLOT_PLAYING || in_safe_zone(t->x, t->y) || far_from(t->x, t->y, b->x, b->y, BOSS_SENSE * 2))
+            b->target = -1, b->attack = 0;
+    }
+    if (b->target < 0 && g.tick % TICK_HZ == 0) b->target = (int8_t)boss_nearest(BOSS_SENSE);
+    const player_t *prey = b->target >= 0 ? &g.players[b->target] : 0;
+    if (prey && !b->attack && !b->rest && !far_from(prey->x, prey->y, b->x, b->y, MEGA_CHARGE_FROM))
+        b->attack = MEGA_CHARGE_TIME;
+    boss_swim(prey, b->attack ? MEGA_CHARGE_SPEED : MEGA_SPEED);
+    if (!b->attack) return;
+    b->attack--;
+    if (iabs(prey->x - b->x) <= 1 && iabs(prey->y - b->y) <= 1) {
+        b->attack = 0;
+        b->rest = MEGA_REST;
+        boss_hurt(b->target, MEGA_BITE);
+    } else if (!b->attack) {
+        b->rest = MEGA_REST; // errou: cansou do mesmo jeito
+    }
+}
+
+// Kraken: fica parado no fundo e, a cada 3 s, os tentáculos agarram os 3
+// barcos mais perto (até 12 células): tiram vida, prendem por 2 s e puxam
+// o barco para perto dele. Quem tem arma de longe bate sem ser pego.
+static void update_kraken(void) {
+    boss_t *b = &g.boss;
+    if (b->attack) b->attack--;
+    if (b->rest) return;
+    b->rest = KRAKEN_EVERY;
+    uint8_t taken[MAX_PLAYERS] = {0};
+    for (int arm = 0; arm < KRAKEN_ARMS; arm++) {
+        int best = KRAKEN_REACH * KRAKEN_REACH + 1, slot = -1;
+        for (int t = 0; t < MAX_PLAYERS; t++) {
+            const player_t *p = &g.players[t];
+            int dx = p->x - b->x, dy = p->y - b->y;
+            if (p->state == SLOT_PLAYING && !taken[t] && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
+                best = dx * dx + dy * dy, slot = t;
+        }
+        if (slot < 0) break;
+        taken[slot] = 1;
+        b->attack = 5; // o cliente desenha os tentáculos por meio segundo
+        player_t *p = &g.players[slot];
+        for (int i = 0; i < KRAKEN_PULL; i++) {
+            int nx = p->x + ((b->x > p->x) - (b->x < p->x)), ny = p->y + ((b->y > p->y) - (b->y < p->y));
+            if (iabs(nx - b->x) <= 1 && iabs(ny - b->y) <= 1) break; // já está colado nele
+            if (tile_is_sailable(tile(nx, ny))) p->x = (int16_t)nx, p->y = (int16_t)ny;
+        }
+        p->grabbed = GRAB_TICKS;
+        p->vel = 0;
+        boss_hurt(slot, KRAKEN_DAMAGE);
+    }
+}
+
+// Cthulhu: vem devagar atrás do barco mais perto e, a cada 5 s, solta um anel
+// de 8 tiros em volta. Quem chega a 15 células dele fica louco (is_mad).
+static void update_cthulhu(void) {
+    boss_t *b = &g.boss;
+    if (b->attack) b->attack--;
+    if (b->target >= 0) {
+        const player_t *t = &g.players[b->target];
+        if (t->state != SLOT_PLAYING || in_safe_zone(t->x, t->y) || far_from(t->x, t->y, b->x, b->y, BOSS_SENSE * 2))
+            b->target = -1;
+    }
+    if (b->target < 0 && g.tick % TICK_HZ == 0) b->target = (int8_t)boss_nearest(BOSS_SENSE);
+    boss_swim(b->target >= 0 ? &g.players[b->target] : 0, CTHULHU_SPEED);
+    if (b->rest || b->target < 0) return; // sem ninguém por perto, não gasta o anel
+    b->rest = CTHULHU_RING_EVERY;
+    b->attack = 5;
+    for (int d = 0; d < 8; d++)
+        spawn_shot(KILLER_BOSS + BOSS_CTHULHU, b->x, b->y, b->x + 8 * DIR_X[d], b->y + 8 * DIR_Y[d], CTHULHU_RING_SPEED,
+                   CTHULHU_RING_RANGE, CTHULHU_RING_DAMAGE, FX_NONE);
+}
+
+// Loucura do Cthulhu: barco perto dele (e fora da zona segura) tem o leme invertido.
+static int is_mad(const player_t *p) {
+    return g.boss.kind == BOSS_CTHULHU && !far_from(p->x, p->y, g.boss.x, g.boss.y, CTHULHU_MADNESS_R) &&
+           !in_safe_zone(p->x, p->y);
+}
+
+// Qual boss vem: Megalodon 45%, Kraken 35%, Cthulhu 20% (o mais raro e mais forte).
+static uint8_t pick_boss(void) {
+    uint32_t r = rnd_below(100);
+    return r < 45 ? BOSS_MEGALODON : r < 80 ? BOSS_KRAKEN : BOSS_CTHULHU;
+}
+
+// Lugar para o boss nascer: água do tipo que ele gosta, longe do porto.
+static int boss_spot(int *ox, int *oy) {
+    for (int tries = 0; tries < 1000; tries++) {
+        int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+        if (!boss_water(x, y) || !far_from(x, y, PORT_X, PORT_Y, BOSS_MIN_DIST)) continue;
+        *ox = x, *oy = y;
+        return 1;
+    }
+    return 0;
+}
+
+static void start_boss(uint8_t kind) {
+    uint8_t online = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) online += g.players[i].state == SLOT_PLAYING;
+    g.next_boss = g.tick + BOSS_GAP + rnd_below(BOSS_GAP);
+    if (!online) { g.next_boss = g.tick + 60 * TICK_HZ; return; } // ninguém para enfrentar: espera
+    g.boss = (boss_t){.kind = kind, .target = -1};
+    int x, y;
+    if (!boss_spot(&x, &y)) { g.boss.kind = BOSS_NONE; return; }
+    const boss_info_t *info = &BOSSES[kind];
+    g.boss.x = (int16_t)x;
+    g.boss.y = (int16_t)y;
+    g.boss.hp = g.boss.hp_max = (int16_t)(info->hp_base + info->hp_per_player * online);
+    g.boss.heading = (uint8_t)rnd_below(8);
+    g.boss.ends = g.tick + BOSS_TIME;
+    event_all(EV_BOSS_START, kind, BOSS_TIME / TICK_HZ, (uint32_t)x | (uint32_t)y << 16);
+}
+
+// Prêmio: o dinheiro é dividido pelo dano. A arma única vai para quem mais
+// bateu (com a bolsa cheia, passa para o seguinte). Quem deu pelo menos 10%
+// do dano ganha um baú.
+static void boss_killed(void) {
+    boss_t *b = &g.boss;
+    const boss_info_t *info = &BOSSES[b->kind];
+    uint32_t total = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) total += b->dmg[i];
+    int mvp = -1;
+    uint8_t got[MAX_PLAYERS] = {0}; // já tentou dar a arma para ele
+    item_t weapon = item_new(info->weapon, rnd());
+    while (total) {
+        int best = -1;
+        for (int i = 0; i < MAX_PLAYERS; i++)
+            if (g.players[i].state == SLOT_PLAYING && b->dmg[i] && !got[i] && (best < 0 || b->dmg[i] > b->dmg[best]))
+                best = i;
+        if (best < 0) break;
+        got[best] = 1;
+        if (bag_add(prof(&g.players[best]), weapon) < 0) {
+            send_event(best, EV_BAG_FULL, FISH_NONE, 0, 0);
+            continue;
+        }
+        mvp = best;
+        send_event(best, EV_ITEM, weapon.base, item_info(weapon).rarity, 0);
+        break;
+    }
+    for (int i = 0; i < MAX_PLAYERS && total; i++) {
+        if (!b->dmg[i] || g.players[i].state != SLOT_PLAYING) continue;
+        uint32_t share = (uint32_t)((uint64_t)info->bounty_cents * b->dmg[i] / total);
+        profile_t *pr = prof(&g.players[i]);
+        pr->money += share;
+        send_event(i, EV_BOSS_REWARD, b->kind, b->dmg[i], share);
+        if (i != mvp && b->dmg[i] * 100 >= total * BOSS_HELPER_PCT) give_random_item(i);
+        if (i == mvp) send_inventory(i);
+        storage_save(g.players[i].profile, pr);
+    }
+    // `count` 1 = afundou; `value` = slot de quem levou a arma + 1 (0 = ninguém).
+    event_all(EV_BOSS_END, b->kind, 1, (uint32_t)(mvp + 1));
+    g.boss = (boss_t){0};
+    send_rank(-1);
+}
+
+// Tiro de jogador passando por (cx, cy): acerta se cair dentro do corpo do boss.
+static int hit_boss(const shot_t *sh, int cx, int cy) {
+    boss_t *b = &g.boss;
+    if (!b->kind || b->hp <= 0) return 0;
+    int r = BOSSES[b->kind].r, dx = cx - b->x, dy = cy - b->y;
+    if (dx * dx + dy * dy > r * r) return 0;
+    int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
+    int dmg = sh->damage < b->hp ? sh->damage : b->hp;
+    b->hp = (int16_t)(b->hp - dmg);
+    if (shooter >= 0) {
+        b->dmg[shooter] = (uint16_t)(b->dmg[shooter] + dmg);
+        send_event(shooter, EV_BOSS_HIT, b->kind, (uint16_t)dmg, (uint32_t)b->hp);
+    }
+    if (sh->fx == FX_LEECH) leech(shooter, dmg);
+    if (sh->fx == FX_GRAB) b->grabbed = GRAB_TICKS;
+    return 1;
+}
+
+static void update_boss(void) {
+    boss_t *b = &g.boss;
+    if (!b->kind) {
+        if (g.tick >= g.next_boss) start_boss(pick_boss());
+        return;
+    }
+    if (b->hp <= 0) { boss_killed(); return; }
+    if (g.tick >= b->ends) { // ninguém afundou: volta para o fundo
+        event_all(EV_BOSS_END, b->kind, 0, 0);
+        g.boss = (boss_t){0};
+        return;
+    }
+    if (b->grabbed) b->grabbed--;
+    if (b->rest) b->rest--;
+    if (b->kind == BOSS_MEGALODON) update_megalodon();
+    if (b->kind == BOSS_KRAKEN) update_kraken();
+    if (b->kind == BOSS_CTHULHU) update_cthulhu();
+}
+
 static void update_player(int slot) {
     player_t *p = &g.players[slot];
     // Inércia: com tecla apertada acelera 1 célula/s por tick; soltou,
     // o barco desliza e perde 1 célula/s a cada 2 ticks.
-    int want = dir_index(p->dx, p->dy);
+    // Louco pelo Cthulhu: o leme responde ao contrário.
+    int want = is_mad(p) ? dir_index(-p->dx, -p->dy) : dir_index(p->dx, p->dy);
     if (want >= 0) {
         steer(p, want);
         if (p->vel < p->speed) p->vel++;
@@ -1436,6 +1809,7 @@ static void update_player(int slot) {
         p->vel--;
     }
     if (p->vel > p->speed) p->vel = p->speed; // tirou o motor, por exemplo
+    if (p->grabbed) p->grabbed--, p->vel = 0; // preso pelo Tentáculo: vira, mas não anda
     if (p->reload) p->reload--;
     int moved = 0;
     p->move_budget += p->vel; // vel células/s = vel décimos por tick
@@ -1705,6 +2079,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
     g.ghost = -1;
+    g.next_boss = BOSS_FIRST + rnd_below(BOSS_FIRST);
 }
 
 int game_connect(void) {
@@ -1721,6 +2096,7 @@ void game_disconnect(int slot) {
     if (slot < 0 || slot >= MAX_PLAYERS) return;
     player_t *p = &g.players[slot];
     int was_playing = p->state == SLOT_PLAYING;
+    g.boss.dmg[slot] = 0; // o próximo a usar o slot não herda o dano no boss
     if (was_playing) storage_save(p->profile, prof(p));
     p->state = SLOT_FREE;
     if (was_playing) send_rank(-1);
@@ -1786,6 +2162,7 @@ void game_tick(void) {
     
     update_shots();
     update_predators();
+    update_boss();
     update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) send_state(i);

@@ -33,8 +33,17 @@ typedef enum {
     ITEM_CASCO,
     ITEM_AMULETO,
     ITEM_ISCA,
+    // Armas únicas: só caem dos bosses e são sempre lendárias.
+    ITEM_DENTE,     // Dente do Megalodon
+    ITEM_TENTACULO, // Tentáculo do Kraken
+    ITEM_CAJADO,    // Cajado de R'lyeh (Cthulhu)
     ITEM_BASE_COUNT,
 } item_base_id_t;
+
+// Itens que saem de baú: tudo antes das armas únicas.
+#define ITEM_DROP_COUNT ITEM_DENTE
+
+static inline int item_is_unique(uint8_t base) { return base >= ITEM_DROP_COUNT && base < ITEM_BASE_COUNT; }
 
 typedef enum {
     AFFIX_VELOZ = 0,

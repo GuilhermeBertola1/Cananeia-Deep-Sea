@@ -59,7 +59,8 @@ u8  velocidade máxima (células/s)
 u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
 u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
                         bit 2 = zona segura, bit 3 = perto da sereia,
-                        bit 4 = no cais de uma vila
+                        bit 4 = no cais de uma vila, bit 5 = preso por um tentáculo,
+                        bit 6 = louco (leme invertido perto do Cthulhu)
 u16 vida, u16 vida máxima
 u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
@@ -76,6 +77,13 @@ evento do mundo (sempre vem, 10 bytes):
     u8  raio
     u16 segundos que faltam
     i8  vento dx, i8 vento dy   para onde a tempestade anda (−1, 0 ou 1)
+boss (sempre vem, 13 bytes, para todos os jogadores, perto ou longe):
+    u8  tipo            0 nenhum, 1 Megalodon, 2 Kraken, 3 Cthulhu
+    u16 x, u16 y        centro do corpo
+    u8  raio            o tiro acerta a até essa distância do centro
+    u16 vida, u16 vida máxima   a vida é uma só para todos
+    u16 segundos que faltam     para ele ir embora
+    u8  ataque          ticks do ataque que está acontecendo (investida, tentáculos, anel); 0 = nenhum
 ```
 
 ### Eventos (`S_EVENT`)
@@ -95,10 +103,10 @@ evento do mundo (sempre vem, 10 bytes):
 | 11 | consertou: `quantidade` = vida recuperada, `valor` = preço |
 | 12 | dinheiro não dá: `valor` = preço |
 | 13 | seu tiro acertou: `espécie` = id do alvo, `quantidade` = dano, `valor` = vida que sobrou nele |
-| 14 | você tomou um tiro: `espécie` = id de quem atirou (ou `0x81`, o navio fantasma), `quantidade` = dano, `valor` = vida que sobrou |
+| 14 | você tomou um tiro ou um ataque: `espécie` = id de quem atirou (`0x81` navio fantasma, `0xA0` + tipo do boss), `quantidade` = dano, `valor` = vida que sobrou |
 | 15 | não dá para atirar na zona segura |
 | 16 | você afundou alguém: `espécie` = id do alvo |
-| 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu; `0x80` tubarão, `0x81` navio fantasma), `quantidade` = peixes que ficaram na bag |
+| 17 | você afundou: `espécie` = id de quem atirou (`0xFF` se já saiu; `0x80` tubarão, `0x81` navio fantasma, `0xA1` Megalodon, `0xA2` Kraken, `0xA3` Cthulhu), `quantidade` = peixes que ficaram na bag |
 | 18 | pegou um saque: `espécie` = tipo (1 bag, 2 coroa), `quantidade` = 1 se era seu |
 | 19 | achou um saque, mas o barco já carrega 4 |
 | 20 | mercenário: `quantidade` = peixes que foram para o porão, `valor` = recompensa pelas coroas, `espécie` = 1 se sobrou peixe na bag (porão cheio) |
@@ -119,6 +127,10 @@ evento do mundo (sempre vem, 10 bytes):
 | 35 | você afundou um bicho: `espécie` = tipo, `valor` = recompensa; no navio fantasma, `quantidade` = seu dano e `valor` = sua parte |
 | 36 | começou um evento do mundo: `espécie` = tipo, `quantidade` = segundos, `valor` = x + y × 65536 |
 | 37 | o evento do mundo acabou: `espécie` = tipo |
+| 38 | apareceu um boss: `espécie` = tipo, `quantidade` = segundos, `valor` = x + y × 65536 |
+| 39 | seu tiro acertou o boss: `espécie` = tipo, `quantidade` = dano, `valor` = vida que sobrou nele |
+| 40 | o boss foi embora: `espécie` = tipo, `quantidade` = 1 se afundou (0 se o tempo acabou), `valor` = id de quem levou a arma única + 1 (0 = ninguém) |
+| 41 | sua parte do prêmio do boss: `espécie` = tipo, `quantidade` = seu dano, `valor` = centavos |
 
 ### `S_INVENTORY`
 
@@ -155,6 +167,9 @@ O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixo
 | 8 | Casco reforçado | boost | vida 15–30 |
 | 9 | Amuleto de búzios | boost | sorte 5–12 |
 | 10 | Isca encantada | boost | produção 4–8 |
+| 11 | Dente do Megalodon | arma única | dano 9–11 |
+| 12 | Tentáculo do Kraken | arma única | dano 7–9 |
+| 13 | Cajado de R'lyeh | arma única | dano 6–8 |
 
 | Id | Afixo | Stat (comum) |
 | --- | --- | --- |
@@ -163,6 +178,8 @@ O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixo
 | 2 | Afiado | dano 2–5 |
 | 3 | do Pescador | produção 4–10 |
 | 4 | da Sorte | sorte 3–8 |
+
+As armas únicas só caem dos bosses, são sempre lendárias (×2,2, 3 afixos), não saem de baú e o mecânico não as combina.
 
 Raridade: comum 70% (×1,0, 0 ou 1 afixo), raro 22% (×1,3, 1 afixo), épico 7% (×1,65, 2 afixos), lendário 1% (×2,2, 3 afixos). Produção é % a mais na chance de pescar; sorte é a chance de baú, em milésimos, somada aos 4‰ de base a cada peixe.
 
@@ -191,6 +208,11 @@ O cliente só diz para onde quer atirar (`C_FIRE`); o servidor cria o tiro, anda
 | Arpão | 8 células | 0,6 s | 2 células/tick |
 | Mosquete | 14 células | 1,2 s | 3 células/tick |
 | Canhão leve | 18 células | 2,0 s | 2 células/tick |
+| Dente do Megalodon | 10 células | 0,8 s | 3 células/tick |
+| Tentáculo do Kraken | 12 células | 1,0 s | 3 células/tick |
+| Cajado de R'lyeh | 16 células | 1,5 s | 2 células/tick |
+
+Poderes das armas únicas: o **Dente** conserta o seu barco com 25% do dano que causa (no mínimo 1); o **Tentáculo** prende o alvo (barco, bicho ou boss) parado por 2 s; o **Cajado** atira 3 tiros em leque (o do meio e um a uns 14° de cada lado).
 
 A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/src/weapon.odin`.
 
@@ -227,6 +249,19 @@ Bosses e outros NPCs entram aqui como tipos novos.
   - **Tempestade** (2 min, raio 25): anda 1 célula a cada 2 s com o vento; empurra o barco 1 célula por segundo e tira 1 de vida a cada 2 s (só avaria, não afunda); a pesca dentro dela vale o dobro.
   - **Maré de lulas** (1 min 30 s, raio 20, em água funda): 6 cardumes de lula-gigante e o estoque da região cheio.
   - **Navio fantasma** (2 min 30 s): vê qualquer barco a até 20 células, chega a 6 e atira 10 de dano a cada 2 s (alcance 12). 300 de vida; afundá-lo dá $300 divididos pelo dano de cada um e um baú para cada um que acertou. Se o tempo acabar, ele some.
+
+### Bosses
+
+- Um por vez, numa agenda separada dos eventos do mundo (pode ter tempestade e boss juntos): o primeiro de 10 a 20 min depois de o servidor ligar, depois um a cada 20 a 40 min. Sem ninguém online, espera. Nasce a 60 células ou mais do porto, nunca em zona segura, e vai embora depois de 5 min se ninguém afundar.
+- Sorteio: Megalodon 45%, Kraken 35%, Cthulhu 20%.
+- **Vida compartilhada**: base + um tanto por jogador online na hora em que aparece. O tiro acerta a até `raio` células do centro.
+- **Prêmio**: o dinheiro é dividido pelo dano de cada um; a arma única vai para quem mais bateu (com a bolsa cheia, passa para o seguinte); quem deu pelo menos 10% do dano ganha um baú.
+
+| Boss | Vida | Raio | Prêmio | Arma única | Ataque |
+| --- | --- | --- | --- | --- | --- |
+| Megalodon | 600 + 300 por jogador | 2 | $1500 | Dente | só em água funda; nada a 5 células/s atrás do barco mais perto (até 25); a 12 células dá uma investida de 2 s a 12 células/s e morde 25; descansa 4 s |
+| Kraken | 900 + 450 por jogador | 3 | $2500 | Tentáculo | parado; a cada 3 s agarra os 3 barcos mais perto (até 12 células): 12 de dano, puxa 2 células e prende por 2 s |
+| Cthulhu | 1500 + 600 por jogador | 4 | $5000 | Cajado | qualquer água, 2 células/s; a cada 5 s um anel de 8 tiros (12 de dano, alcance 16); a até 15 células o leme fica invertido |
 
 ## Senhas
 
