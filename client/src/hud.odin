@@ -239,6 +239,9 @@ draw_hud :: proc() {
 	if fav, ok := village_fav(); ok && s.at_village {
 		tip = fmt.tprintf("Vila de pescadores. E: lojista (paga +25%% por %s)", species_name(fav))
 	}
+	// Ataques de boss que mudam o controle do barco: o aviso fica por cima de tudo.
+	if s.grabbed do tip = "Preso! Um tentáculo segura o barco."
+	if s.mad do tip = "Loucura! Perto do Cthulhu o leme está invertido."
 	if tip != "" && !menu_open() {
 		w := text_width(tip, 20)
 		tx := (px - w) / 2
@@ -567,7 +570,7 @@ draw_inventory :: proc() {
 		} else {
 			mark := "*" if it.equipped != 0 else " "
 			ench := fmt.tprintf(" +%d", it.enchant) if it.enchant > 0 else ""
-			text(fmt.tprintf("%2d %s %s%s", i + 1, mark, item_name(it.base), ench), cx, row_y, 20, rarity_color(it.rarity))
+			text(fmt.tprintf("%2d %s %s%s", i + 1, mark, item_name(it.base), ench), cx, row_y, 20, item_color(it))
 			if it.equipped != 0 {
 				slot := EQUIP_NAMES[it.equipped] if int(it.equipped) < len(EQUIP_NAMES) else "?"
 				text(slot, cx + list_w - 20 - text_width(slot, 20), row_y, 20, COLOR_ACCENT)
@@ -604,9 +607,19 @@ draw_inventory :: proc() {
 	if sel.base == ITEM_NONE {
 		text("Slot vazio", dx, dy, 20, COLOR_QUIET)
 	} else {
-		text(item_name(sel.base), dx, dy, 20, rarity_color(sel.rarity))
+		text(item_name(sel.base), dx, dy, 20, item_color(sel))
 		dy += 24
-		text(rarity_name(sel.rarity), dx, dy, 20, rarity_color(sel.rarity))
+		rarity := "arma única de boss" if item_is_unique(sel.base) else rarity_name(sel.rarity)
+		text(rarity, dx, dy, 20, item_color(sel))
+		// Arma: alcance e recarga, e o poder especial nas únicas.
+		if wp, ok := weapon_of(sel.base); ok {
+			dy += 24
+			text(fmt.tprintf("Alcance %d  recarga %.1f s", wp.range, f32(wp.reload) / 10), dx, dy, 20, COLOR_QUIET)
+			if wp.fx != FX_NONE {
+				dy += 24
+				text(fx_text(wp.fx), dx, dy, 10, COLOR_UNIQUE)
+			}
+		}
 		if sel.enchant > 0 {
 			dy += 24
 			text(fmt.tprintf("Encanto da sereia +%d", sel.enchant), dx, dy, 20, COLOR_MERMAID)

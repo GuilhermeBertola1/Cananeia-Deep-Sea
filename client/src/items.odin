@@ -83,6 +83,13 @@ rarity_name :: proc(r: u8) -> string {
 	return RARITY_NAMES[r] if int(r) < len(RARITY_NAMES) else "?"
 }
 
+// Cor do item na lista: a da raridade, ou vermelho-dourado na arma única.
+COLOR_UNIQUE :: rl.Color{255, 110, 80, 255}
+
+item_color :: proc(it: Item) -> rl.Color {
+	return COLOR_UNIQUE if item_is_unique(it.base) else rarity_color(it.rarity)
+}
+
 rarity_color :: proc(r: u8) -> rl.Color {
 	return RARITY_COLORS[r] if int(r) < len(RARITY_COLORS) else COLOR_INK
 }
