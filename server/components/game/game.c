@@ -2199,6 +2199,12 @@ void game_save_all(void) {
         if (g.players[i].state == SLOT_PLAYING) storage_save(g.players[i].profile, prof(&g.players[i]));
 }
 
+int game_online(void) {
+    int n = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) n += g.players[i].state == SLOT_PLAYING;
+    return n;
+}
+
 void game_tick(void) {
     g.tick++;
     if (g.tick % STOCK_REGEN_EVERY == 0) regen_stock();
