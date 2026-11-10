@@ -625,10 +625,10 @@ static int bag_add(profile_t *pr, item_t item) {
     return -1;
 }
 
-// Baú: um item aleatório de qualquer tipo.
+// Baú: um item aleatório de qualquer tipo (menos as armas únicas dos bosses).
 static void give_random_item(int slot) {
     player_t *p = &g.players[slot];
-    item_t item = item_new((uint8_t)(1 + rnd_below(ITEM_BASE_COUNT - 1)), rnd());
+    item_t item = item_new((uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1)), rnd());
     if (bag_add(prof(p), item) < 0) {
         send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0);
         return;
@@ -916,7 +916,11 @@ static void combine(int slot, uint8_t a, uint8_t b) {
     profile_t *pr = prof(p);
     if (!at_dock(p) || a >= BAG_SIZE || b >= BAG_SIZE || a == b) return;
     item_t ia = pr->bag[a], ib = pr->bag[b];
-    if (ia.base == ITEM_NONE || ia.base != ib.base) { send_event(slot, EV_CANT_COMBINE, FISH_NONE, 0, 0); return; }
+    // Arma única não se combina: já é lendária e não existe outra igual.
+    if (ia.base == ITEM_NONE || ia.base != ib.base || item_is_unique(ia.base)) {
+        send_event(slot, EV_CANT_COMBINE, FISH_NONE, 0, 0);
+        return;
+    }
 
     uint8_t ra = item_info(ia).rarity, rb = item_info(ib).rarity;
     uint8_t want = ra > rb ? ra : rb;

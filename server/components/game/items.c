@@ -13,6 +13,10 @@ const item_base_t ITEM_BASES[ITEM_BASE_COUNT] = {
     [ITEM_CASCO] = {"Casco reforçado", KIND_BOOST, STAT_HP, 15, 30},
     [ITEM_AMULETO] = {"Amuleto de búzios", KIND_BOOST, STAT_LUCK, 5, 12},
     [ITEM_ISCA] = {"Isca encantada", KIND_BOOST, STAT_PRODUCTION, 4, 8},
+    // Únicas: a faixa parece baixa, mas elas são sempre lendárias (x2,2).
+    [ITEM_DENTE] = {"Dente do Megalodon", KIND_WEAPON, STAT_DAMAGE, 9, 11},
+    [ITEM_TENTACULO] = {"Tentáculo do Kraken", KIND_WEAPON, STAT_DAMAGE, 7, 9},
+    [ITEM_CAJADO] = {"Cajado de R'lyeh", KIND_WEAPON, STAT_DAMAGE, 6, 8},
 };
 
 const affix_t AFFIXES[AFFIX_COUNT] = {
@@ -58,6 +62,7 @@ item_info_t item_info(item_t item) {
 
     uint32_t r = next(&s) % 1000;
     while (info.rarity < RARITY_LEGENDARY && r >= RARITY_CHANCE[info.rarity]) r -= RARITY_CHANCE[info.rarity++];
+    if (item_is_unique(item.base)) info.rarity = RARITY_LEGENDARY; // arma de boss é sempre lendária
 
     const item_base_t *b = &ITEM_BASES[item.base];
     info.stats[b->stat] = roll(&s, b->min, b->max, info.rarity);

@@ -22,7 +22,7 @@ int main(void) {
     int ok = 1;
     const int N = 100000;
     for (int i = 0; i < N; i++) {
-        item_t it = item_new((uint8_t)(1 + i % (ITEM_BASE_COUNT - 1)), (uint32_t)i * 2654435761u);
+        item_t it = item_new((uint8_t)(1 + i % (ITEM_DROP_COUNT - 1)), (uint32_t)i * 2654435761u);
         item_info_t a = item_info(it), b = item_info(it);
         if (memcmp(&a, &b, sizeof a) != 0) ok = 0; // mesma semente, mesmo item
         count[a.rarity]++;
@@ -30,7 +30,13 @@ int main(void) {
     printf("Raridades em %d itens:\n", N);
     for (int i = 0; i < RARITY_COUNT; i++) printf("  %-9s %5.1f%%\n", RARITY[i], 100.0 * count[i] / N);
     printf("\nAlguns exemplos:\n");
-    for (uint32_t i = 1; i <= 12; i++) print_item(item_new((uint8_t)(1 + i % (ITEM_BASE_COUNT - 1)), i * 7919u));
+    for (uint32_t i = 1; i <= 12; i++) print_item(item_new((uint8_t)(1 + i % (ITEM_DROP_COUNT - 1)), i * 7919u));
+    printf("\nArmas únicas dos bosses:\n");
+    for (uint8_t b = ITEM_DROP_COUNT; b < ITEM_BASE_COUNT; b++) {
+        item_t it = item_new(b, 12345u);
+        print_item(it);
+        if (item_info(it).rarity != RARITY_LEGENDARY) ok = 0;
+    }
     puts(ok ? "\nMesma semente gera sempre o mesmo item." : "\nERRO: item mudou com a mesma semente!");
     return ok ? 0 : 1;
 }
