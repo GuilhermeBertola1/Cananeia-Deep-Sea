@@ -82,6 +82,10 @@
 #define GHOST_SHOT_SPEED 2
 #define GHOST_BOUNTY_CENTS 30000   // $300 divididos entre quem acertou
 
+// Poderes das armas únicas (weapon_t.fx).
+#define LEECH_PCT 25          // Dente: % do dano que volta como conserto
+#define GRAB_TICKS (2 * TICK_HZ) // Tentáculo: tempo que o alvo fica preso
+
 // Mecânico: preço pela raridade mínima do item que sai. Nunca sai comum:
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
@@ -117,6 +121,7 @@ typedef struct {
     uint8_t move_budget; // em décimos de célula
     uint8_t blocked;
     uint8_t reload;
+    uint8_t grabbed;    // ticks que ainda fica preso pelo Tentáculo do Kraken
     uint32_t next_spin; // tick em que a roleta da sereia libera de novo
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
@@ -137,6 +142,7 @@ typedef struct {
     int32_t x, y;        // em 1/SUB de célula
     int32_t ux, uy;      // um passo de 1 célula na direção do tiro, em 1/SUB
     uint16_t damage;
+    uint8_t fx;          // poder da arma que atirou (weapon_fx_t)
 } shot_t;
 
 // Bag ou coroa boiando no mar, esperando alguém passar por cima.
@@ -161,6 +167,7 @@ typedef struct {
     uint8_t heading;     // para onde nada quando só está passeando (0 a 7)
     uint8_t move_budget; // em décimos de célula, igual ao barco
     uint8_t bite;        // ticks até poder morder de novo
+    uint8_t grabbed;     // ticks que ainda fica preso pelo Tentáculo
 } predator_t;
 
 // O evento do mundo que está acontecendo agora (só um por vez).
@@ -984,7 +991,8 @@ static const weapon_t *weapon(const player_t *p) {
 
 // Um tiro de (x, y) na direção de (tx, ty). Serve para os barcos e para o
 // navio fantasma. Devolve 0 se não saiu (mira em cima de si ou mar lotado de tiros).
-static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed, uint8_t range, uint16_t damage) {
+static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed, uint8_t range, uint16_t damage,
+                      uint8_t fx) {
     int dx = tx - x, dy = ty - y;
     uint32_t len = isqrt((uint32_t)(dx * dx + dy * dy));
     if (len == 0) return 0;
@@ -1001,6 +1009,7 @@ static int spawn_shot(uint8_t owner, int x, int y, int tx, int ty, uint8_t speed
             .ux = dx * SUB / (int32_t)len,
             .uy = dy * SUB / (int32_t)len,
             .damage = damage,
+            .fx = fx,
         };
         return 1;
     }
@@ -1013,7 +1022,28 @@ static void fire(int slot, int tx, int ty) {
     if (!wp || p->reload) return;
     if (in_safe_zone(p->x, p->y)) { send_event(slot, EV_SAFE_ZONE, FISH_NONE, 0, 0); return; }
     uint16_t damage = (uint16_t)(p->stats[STAT_DAMAGE] > 1 ? p->stats[STAT_DAMAGE] : 1);
-    if (spawn_shot((uint8_t)slot, p->x, p->y, tx, ty, wp->speed, wp->range, damage)) p->reload = wp->reload;
+    if (!spawn_shot((uint8_t)slot, p->x, p->y, tx, ty, wp->speed, wp->range, damage, wp->fx)) return;
+    p->reload = wp->reload;
+    if (wp->fx == FX_SPREAD) {
+        // Cajado: mais dois tiros, um de cada lado. Mirar em (4 * dx - dy, 4 * dy + dx)
+        // abre uns 14 graus sem precisar de seno nem cosseno.
+        int dx = tx - p->x, dy = ty - p->y;
+        spawn_shot((uint8_t)slot, p->x, p->y, p->x + 4 * dx - dy, p->y + 4 * dy + dx, wp->speed, wp->range, damage, wp->fx);
+        spawn_shot((uint8_t)slot, p->x, p->y, p->x + 4 * dx + dy, p->y + 4 * dy - dx, wp->speed, wp->range, damage, wp->fx);
+    }
+}
+
+// Dente do Megalodon: quem acertou conserta o próprio barco com parte do dano.
+static void leech(int shooter, int dmg) {
+    if (shooter < 0) return;
+    player_t *p = &g.players[shooter];
+    profile_t *pr = prof(p);
+    int heal = dmg * LEECH_PCT / 100;
+    if (heal < 1) heal = 1;
+    if (heal > pr->damage) heal = pr->damage;
+    if (!heal) return;
+    pr->damage = (uint16_t)(pr->damage - heal);
+    update_stats(p); // saiu de "avariado" se estava
 }
 
 // Joga um saque no mar, numa célula de água perto de (x, y). Com o mar
@@ -1074,6 +1104,8 @@ static void hit(int target, shot_t *sh) {
     int dmg = sh->damage;
     int shooter = sh->owner < MAX_PLAYERS && g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pr->damage = (uint16_t)(pr->damage + dmg > hp_max(t) ? hp_max(t) : pr->damage + dmg);
+    if (sh->fx == FX_LEECH) leech(shooter, dmg);
+    if (sh->fx == FX_GRAB) t->grabbed = GRAB_TICKS, t->vel = 0;
     send_event(target, EV_HURT, sh->owner, (uint16_t)dmg, (uint32_t)hp(t));
     if (shooter >= 0) send_event(shooter, EV_HIT, (uint8_t)target, (uint16_t)dmg, (uint32_t)hp(t));
     // Vida 0 por tiro é morte (na costa continua sendo só avaria).
@@ -1126,6 +1158,8 @@ static void update_drops(void) {
 static void hit_predator(predator_t *pd, const shot_t *sh) {
     int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     pd->hp = (int16_t)(pd->hp - sh->damage);
+    if (sh->fx == FX_LEECH) leech(shooter, sh->damage);
+    if (sh->fx == FX_GRAB) pd->grabbed = GRAB_TICKS;
     if (pd->kind == PRED_GHOST && shooter >= 0) g.ghost_dmg[shooter] += sh->damage;
     if (pd->hp > 0) {
         if (shooter >= 0) send_event(shooter, EV_PREDATOR_HIT, pd->kind, sh->damage, (uint32_t)pd->hp);
@@ -1185,6 +1219,7 @@ static int is_prey(const player_t *p) {
 
 // Um passo de uma célula; na diagonal, desliza pela beira como o barco.
 static int pred_step(predator_t *pd, int dx, int dy) {
+    if (pd->grabbed) return 0; // preso pelo Tentáculo
     if (pred_water(pd, pd->x + dx, pd->y + dy)) return pd->x += dx, pd->y += dy, 1;
     if (dx && dy && pred_water(pd, pd->x + dx, pd->y)) return pd->x += dx, 1;
     if (dx && dy && pred_water(pd, pd->x, pd->y + dy)) return pd->y += dy, 1;
@@ -1244,7 +1279,7 @@ static void update_ghost(predator_t *pd) {
     // `bite` serve de recarga do canhão.
     if (prey && !pd->bite && !far_from(prey->x, prey->y, pd->x, pd->y, GHOST_RANGE + 1)) {
         if (spawn_shot(KILLER_PREDATOR + PRED_GHOST, pd->x, pd->y, prey->x, prey->y, GHOST_SHOT_SPEED, GHOST_RANGE + 2,
-                       GHOST_DAMAGE))
+                       GHOST_DAMAGE, FX_NONE))
             pd->bite = GHOST_RELOAD;
     }
 }
@@ -1255,6 +1290,7 @@ static void update_predators(void) {
         predator_t *pd = &g.predators[i];
         if (!pd->alive) continue;
         if (pd->bite) pd->bite--;
+        if (pd->grabbed) pd->grabbed--;
         if (pd->kind == PRED_GHOST) { update_ghost(pd); continue; }
         alive++;
         // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
@@ -1440,6 +1476,7 @@ static void update_player(int slot) {
         p->vel--;
     }
     if (p->vel > p->speed) p->vel = p->speed; // tirou o motor, por exemplo
+    if (p->grabbed) p->grabbed--, p->vel = 0; // preso pelo Tentáculo: vira, mas não anda
     if (p->reload) p->reload--;
     int moved = 0;
     p->move_budget += p->vel; // vel células/s = vel décimos por tick
