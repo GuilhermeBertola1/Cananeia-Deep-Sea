@@ -84,6 +84,7 @@ render_init :: proc() {
 		w := f32(info.advanceX) if info.advanceX > 0 else f32(info.image.width)
 		glyph_w[cp] = w * scale
 	}
+	water_init()
 }
 
 // Desenha um caractere centralizado na célula (sx, sy) da tela.
@@ -141,7 +142,12 @@ draw_world :: proc() {
 	v := view()
 	for layer in Layer {
 		switch layer {
-		case .Ocean, .Islands:
+		case .Ocean:
+			// O mar vai para uma textura e volta pela tela com o shader de água.
+			water_begin()
+			draw_terrain(v, layer)
+			water_end(v.ox, v.oy)
+		case .Islands:
 			draw_terrain(v, layer)
 		case .Marine_Life:
 			draw_schools(v)
