@@ -50,13 +50,18 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_MISSION_WAIT = 27, EV_ENCHANT = 28, EV_NOTHING_TO_ENCHANT = 29, EV_MISSION_GIVE_UP = 30,
        EV_COMBINED = 31, EV_CANT_COMBINE = 32,
        EV_BITTEN = 33, EV_PREDATOR_HIT = 34, EV_PREDATOR_KILL = 35,
-       EV_WORLD_START = 36, EV_WORLD_END = 37 };
+       EV_WORLD_START = 36, EV_WORLD_END = 37,
+       EV_BOSS_START = 38, EV_BOSS_HIT = 39, EV_BOSS_END = 40, EV_BOSS_REWARD = 41 };
 // Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
 enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2, WORLD_GHOST = 3 };
 // Tipos de bicho (no EV_BITTEN, EV_PREDATOR_* e somados a KILLER_PREDATOR).
 enum { PRED_SHARK = 0, PRED_GHOST = 1 };
-// No EV_DIED, `espécie` é quem afundou: o id do jogador, ou KILLER_PREDATOR + tipo do bicho.
+// Bosses (no EV_BOSS_*, `espécie` é o tipo).
+enum { BOSS_NONE = 0, BOSS_MEGALODON = 1, BOSS_KRAKEN = 2, BOSS_CTHULHU = 3, BOSS_COUNT };
+// No EV_DIED, `espécie` é quem afundou: o id do jogador, KILLER_PREDATOR + tipo do bicho
+// ou KILLER_BOSS + tipo do boss.
 #define KILLER_PREDATOR 0x80
+#define KILLER_BOSS 0xA0
 enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5 };
 enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
 enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3,
