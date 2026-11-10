@@ -27,6 +27,7 @@ static uint64_t now_us(void) {
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -291,6 +292,8 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
+#else
+    signal(SIGPIPE, SIG_IGN); // jogador que caiu não pode derrubar o servidor junto
 #endif
     for (int i = 0; i < MAX_CLIENTS; i++) clients[i].fd = BAD_SOCK;
     for (int i = 0; i < MAX_PLAYERS; i++) slot_client[i] = -1;
