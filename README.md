@@ -38,6 +38,8 @@ No porto, o mercenário troca as bags dos outros pelos peixes delas e paga uma r
 
 O mar está vivo. Cada região tem uma quantidade de peixe: pesque demais no mesmo lugar e ela esvazia (o painel mostra quanto sobrou), depois se recupera sozinha. Em outras ilhas há vilas de pescadores (`V`) que compram peixe, pagam mais pela espécie preferida e consertam o barco. Tubarões (`^`) rondam o mar fundo atrás de barcos fracos. De tempos em tempos acontece um evento para todos: uma tempestade que empurra o barco mas dobra a pesca, uma maré de lulas, ou um navio fantasma que atira em quem chegar perto e divide o tesouro entre quem ajudou a afundá-lo.
 
+E às vezes sobe um boss, anunciado para todos, com uma vida só para o servidor inteiro: o Megalodon, que dá investidas no mar fundo; o Kraken, que agarra e puxa quem chega perto; ou o Cthulhu, que atira em volta e enlouquece o leme de quem se aproxima. O dinheiro é dividido pelo dano, e quem mais bateu leva a arma única do boss: o Dente que conserta o barco, o Tentáculo que prende o alvo ou o Cajado que atira em leque.
+
 ## Estrutura
 
 ```
