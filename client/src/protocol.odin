@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 9
+PROTOCOL_VERSION :: 10
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32
@@ -20,6 +20,8 @@ C_FIRE :: 0x08
 C_MERC :: 0x09
 C_MERMAID :: 0x0A
 C_COMBINE :: 0x0B
+C_BUY :: 0x0C
+C_DELIVER :: 0x0D
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -32,6 +34,7 @@ S_MARKS :: 0x87
 S_PRICES :: 0x88
 S_INVENTORY :: 0x89
 S_BOAT :: 0x8A
+S_CATALOG :: 0x8B
 
 ERR_BAD_NAME :: 1
 ERR_NAME_ONLINE :: 2
@@ -82,6 +85,16 @@ EV_BOSS_HIT :: 39
 EV_BOSS_END :: 40
 EV_BOSS_REWARD :: 41
 EV_WEATHER :: 42
+EV_BOUGHT :: 43
+EV_SOLD_OUT :: 44
+EV_CATALOG :: 45
+EV_QUEST_DONE :: 46
+EV_QUEST_WAIT :: 47
+EV_QUEST_MISSING :: 48
+
+// Lojas do C_BUY: o armeiro, e o mascate da vila v é SHOP_VILLAGE + v.
+SHOP_ARMORY :: 0
+SHOP_VILLAGE :: 1
 
 // No EV_DIED e no EV_HURT, quem atacou: id do jogador, KILLER_PREDATOR + tipo do bicho
 // ou KILLER_BOSS + tipo do boss.
@@ -110,6 +123,7 @@ MARK_BAG :: 2
 MARK_CROWN :: 3
 MARK_MERMAID :: 4
 MARK_VILLAGE :: 5
+MARK_ARMORY :: 6
 STATE_AT_DOCK :: 1 << 0
 STATE_BROKEN :: 1 << 1
 STATE_SAFE :: 1 << 2
@@ -117,6 +131,7 @@ STATE_AT_MERMAID :: 1 << 3
 STATE_AT_VILLAGE :: 1 << 4
 STATE_GRABBED :: 1 << 5 // preso por um tentáculo
 STATE_MAD :: 1 << 6 // louco perto do Cthulhu: o leme está invertido
+STATE_AT_ARMORY :: 1 << 7
 
 MERMAID_TALK :: 0
 MERMAID_GIVE_UP :: 1
@@ -225,5 +240,17 @@ send_mermaid :: proc(action: u8) {
 
 send_combine :: proc(a, b: u8) {
 	buf := [3]u8{C_COMBINE, a, b}
+	net_send(buf[:])
+}
+
+// Compra a oferta `offer` da loja `shop` (SHOP_ARMORY ou SHOP_VILLAGE + vila).
+send_buy :: proc(shop, offer: u8) {
+	buf := [3]u8{C_BUY, shop, offer}
+	net_send(buf[:])
+}
+
+// Entrega a encomenda do mascate da vila onde o barco está.
+send_deliver :: proc() {
+	buf := [1]u8{C_DELIVER}
 	net_send(buf[:])
 }

@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 9
+#define PROTOCOL_VERSION 10
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -40,6 +40,7 @@ enum {
     S_PRICES = 0x88,  // u16 centavos[FISH_COUNT]
     S_INVENTORY = 0x89,
     S_BOAT = 0x8A,
+    S_CATALOG = 0x8B, // catálogo do mascate da vila onde o barco está
 };
 
 enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4, ERR_BAD_PASSWORD = 5, ERR_WRONG_PASSWORD = 6 };
@@ -70,10 +71,10 @@ enum { BOSS_NONE = 0, BOSS_MEGALODON = 1, BOSS_KRAKEN = 2, BOSS_CTHULHU = 3, BOS
 // ou KILLER_BOSS + tipo do boss.
 #define KILLER_PREDATOR 0x80
 #define KILLER_BOSS 0xA0
-enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5 };
+enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5, MARK_ARMORY = 6 };
 enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
 enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3,
-       STATE_AT_VILLAGE = 1 << 4, STATE_GRABBED = 1 << 5, STATE_MAD = 1 << 6 };
+       STATE_AT_VILLAGE = 1 << 4, STATE_GRABBED = 1 << 5, STATE_MAD = 1 << 6, STATE_AT_ARMORY = 1 << 7 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.
 typedef struct {

@@ -517,6 +517,14 @@ static void send_marks(int slot) {
     put_u8(&w, MARK_MERMAID);
     put_u8(&w, 0);
     n++;
+    const safe_zone_t *armory = &g.safe_zones[ZONE_ARMORY];
+    if (armory->r > 0) {
+        put_u16(&w, (uint16_t)armory->x);
+        put_u16(&w, (uint16_t)armory->y);
+        put_u8(&w, MARK_ARMORY);
+        put_u8(&w, 0);
+        n++;
+    }
     for (int i = 0; i < g.village_count; i++) {
         put_u16(&w, (uint16_t)g.villages[i].x);
         put_u16(&w, (uint16_t)g.villages[i].y);
@@ -542,6 +550,16 @@ static item_info_t bag_info(const profile_t *pr, int index) {
 
 // O servidor manda o item já "aberto" (raridade, afixos, números), então o
 // cliente não precisa rodar o gerador.
+// Um item "aberto" na rede: 17 bytes (o mesmo formato no S_INVENTORY e no S_CATALOG).
+static void put_item(writer_t *w, const item_info_t *info, uint8_t equipped, uint8_t enchant) {
+    put_u8(w, info->base);
+    put_u8(w, info->rarity);
+    put_u8(w, equipped);
+    put_u8(w, enchant);
+    for (int a = 0; a < MAX_AFFIXES; a++) put_u8(w, info->affix[a]);
+    for (int s = 0; s < STAT_COUNT; s++) put_i16(w, info->stats[s]);
+}
+
 static void send_inventory(int slot) {
     const player_t *p = &g.players[slot];
     const profile_t *pr = prof(p);
@@ -550,12 +568,7 @@ static void send_inventory(int slot) {
     put_u8(&w, BAG_SIZE);
     for (int i = 0; i < BAG_SIZE; i++) {
         item_info_t info = bag_info(pr, i);
-        put_u8(&w, info.base);
-        put_u8(&w, info.rarity);
-        put_u8(&w, equipped_slot(pr, i));
-        put_u8(&w, pr->enchant[i]);
-        for (int a = 0; a < MAX_AFFIXES; a++) put_u8(&w, info.affix[a]);
-        for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, info.stats[s]);
+        put_item(&w, &info, equipped_slot(pr, i), pr->enchant[i]);
     }
     for (int s = 0; s < STAT_COUNT; s++) put_i16(&w, p->stats[s]);
     put_u16(&w, pr->kills);
@@ -647,7 +660,7 @@ static void send_state(int slot) {
     put_u8(&w, (at_dock(p) ? STATE_AT_DOCK : 0) | (hp(p) == 0 ? STATE_BROKEN : 0) |
                    (in_safe_zone(p->x, p->y) ? STATE_SAFE : 0) | (near_mermaid(p) ? STATE_AT_MERMAID : 0) |
                    (at_village(p) >= 0 ? STATE_AT_VILLAGE : 0) | (p->grabbed ? STATE_GRABBED : 0) |
-                   (is_mad(p) ? STATE_MAD : 0));
+                   (is_mad(p) ? STATE_MAD : 0) | (at_armory(p) ? STATE_AT_ARMORY : 0));
     put_u16(&w, (uint16_t)hp(p));
     put_u16(&w, (uint16_t)hp_max(p));
     put_u8(&w, p->reload);
@@ -1112,6 +1125,34 @@ static void buy_armory(int slot, uint8_t offer) {
 
 static uint32_t peddler_price(uint8_t enchant) { return PEDDLER_PRICE + PEDDLER_ENCHANT_PRICE * enchant; }
 
+// Catálogo do mascate da vila onde o barco está (nada se não está numa vila).
+static void send_catalog(int slot) {
+    const player_t *p = &g.players[slot];
+    int vi = at_village(p);
+    if (vi < 0) return;
+    const village_t *v = &g.villages[vi];
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_CATALOG);
+    put_u8(&w, (uint8_t)vi);
+    put_u16(&w, (uint16_t)((g.catalog_ends - g.tick) / TICK_HZ));
+    put_u8(&w, PEDDLER_ITEMS);
+    for (int k = 0; k < PEDDLER_ITEMS; k++) {
+        item_info_t info = item_info_enchanted(v->offer[k], v->offer_enchant[k]); // vendido: tipo 0
+        put_item(&w, &info, 0, v->offer[k].base ? v->offer_enchant[k] : 0);
+        put_u32(&w, peddler_price(v->offer_enchant[k]));
+    }
+    put_u8(&w, v->quest_species);
+    put_u8(&w, v->quest_count);
+    put_u8(&w, (v->quest_done[p->profile / 8] >> (p->profile % 8)) & 1);
+    send_w(slot, &w);
+}
+
+// Para todo mundo que está numa vila: depois de uma compra ou de uma troca.
+static void send_catalogs(void) {
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_catalog(i);
+}
+
 // Mascate: quem chegar primeiro leva. O item vem com o encanto já posto.
 static void buy_peddler(int slot, int village, uint8_t offer) {
     player_t *p = &g.players[slot];
@@ -1129,6 +1170,7 @@ static void buy_peddler(int slot, int village, uint8_t offer) {
     send_event(slot, EV_BOUGHT, v->offer[offer].base, RARITY_EPIC, price);
     v->offer[offer] = (item_t){0}; // esgotado até a próxima troca
     send_inventory(slot);
+    send_catalogs(); // quem mais está na vila vê o "vendido" na hora
     send_rank(-1);
 }
 
@@ -1152,6 +1194,7 @@ static void deliver(int slot) {
     storage_save(p->profile, pr);
     send_event(slot, EV_QUEST_DONE, sp, v->quest_count, pay);
     give_random_item(slot); // o baú (se a bolsa estiver cheia, avisa)
+    send_catalog(slot);
     send_prices(-1);
     send_rank(-1);
 }
@@ -1577,6 +1620,7 @@ static void update_catalog(void) {
     if (g.tick < g.catalog_ends) return;
     new_catalog();
     event_all(EV_CATALOG, FISH_NONE, CATALOG_TIME / TICK_HZ / 60, 0); // count = minutos até a próxima
+    send_catalogs();
 }
 
 static int in_event(uint8_t kind, int x, int y) {
@@ -2389,6 +2433,7 @@ void game_tick(void) {
         for (int i = 0; i < FISH_COUNT; i++) g.pressure[i] = g.pressure[i] * 99 / 100;
         send_prices(-1);
         send_marks(-1);
+        send_catalogs(); // a contagem até a troca anda
     }
     if (g.tick % 50 == 0) send_rank(-1);
     if (g.tick % SAVE_EVERY == 0) game_save_all();

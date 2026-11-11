@@ -32,6 +32,8 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x09` | `C_MERC` | Entrega o saque ao mercenário: os peixes das bags vão para o porão e as coroas viram recompensa. Só no cais |
 | `0x0A` | `C_MERMAID` | `u8` ação: 0 fala (gira a roleta ou entrega a coroa da missão), 1 desiste da missão. Só perto da sereia |
 | `0x0B` | `C_COMBINE` | `u8` índice a, `u8` índice b na bolsa: o mecânico junta os dois itens (mesmo tipo) num só, no lugar de `a`. Só no cais |
+| `0x0C` | `C_BUY` | `u8` loja (0 armeiro, 1 + v mascate da vila v), `u8` oferta. No armeiro, só no cais do forte; no mascate, só no cais daquela vila |
+| `0x0D` | `C_DELIVER` | Entrega a encomenda do mascate da vila onde o barco está |
 
 ## Servidor → cliente
 
@@ -47,6 +49,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x88` | `S_PRICES` | a cada 1 s e após vendas | `u16` preço em centavos de cada espécie (9) |
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
 | `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
+| `0x8B` | `S_CATALOG` | a cada 1 s para quem está no cais de uma vila, e logo depois de uma compra, entrega ou troca | ver abaixo |
 
 ### `S_STATE`
 
@@ -60,7 +63,8 @@ u8  velocidade agora    sobe até a máxima e cai devagar (inércia)
 u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
                         bit 2 = zona segura, bit 3 = perto da sereia,
                         bit 4 = no cais de uma vila, bit 5 = preso por um tentáculo,
-                        bit 6 = louco (leme invertido perto do Cthulhu)
+                        bit 6 = louco (leme invertido perto do Cthulhu),
+                        bit 7 = no cais do forte do armeiro
 u16 vida, u16 vida máxima
 u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
@@ -137,6 +141,12 @@ Na neblina, a lista de outros barcos e a de bichos só trazem quem está a até 
 | 40 | o boss foi embora: `espécie` = tipo, `quantidade` = 1 se afundou (0 se o tempo acabou), `valor` = id de quem levou a arma única + 1 (0 = ninguém) |
 | 41 | sua parte do prêmio do boss: `espécie` = tipo, `quantidade` = seu dano, `valor` = centavos |
 | 42 | o clima mudou (vai para todos): `espécie` = clima novo (0 limpo, 1 chuva, 2 neblina), `quantidade` = segundos que ele dura |
+| 43 | comprou no armeiro ou no mascate: `espécie` = tipo do item, `quantidade` = raridade, `valor` = preço |
+| 44 | mascate: esse item já foi vendido (volta na próxima troca) |
+| 45 | os mascates trocaram o catálogo (vai para todos): `quantidade` = minutos até a próxima troca |
+| 46 | entregou a encomenda: `espécie` = espécie, `quantidade` = peixes, `valor` = pagamento (o baú vem num evento 6 ou 7 em seguida) |
+| 47 | encomenda: você já entregou neste catálogo |
+| 48 | encomenda: falta peixe: `espécie` = espécie, `quantidade` = quantos ele pede, `valor` = quantos você tem |
 
 ### `S_INVENTORY`
 
@@ -155,6 +165,18 @@ u8  n                   saques que o barco carrega (4)
 n × (u8 tipo, u16 peixes, nome do dono)          tipo 0 = vazio, 1 bag, 2 coroa
 u8  missão              1 = a sereia pediu uma coroa
 nome do alvo            vazio sem missão
+```
+
+### `S_CATALOG`
+
+```
+u8  vila                índice da vila (a mesma ordem das marcas MARK_VILLAGE)
+u16 segundos até a troca do catálogo
+u8  n                   itens à venda (2)
+n × (item (17 bytes, como no S_INVENTORY; tipo 0 = já vendido), u32 preço)
+u8  espécie da encomenda
+u8  quantos peixes ele pede
+u8  já entregou         1 = você já entregou neste catálogo
 ```
 
 O item é guardado no servidor só como `u32 semente + u8 tipo`; raridade, afixos e números saem da semente (`server/components/game/items.c`). O servidor manda o item já pronto, então o cliente não roda o gerador.
@@ -243,8 +265,16 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 | 3 coroa | 0 |
 | 4 sereia | 0 |
 | 5 vila de pescadores | espécie que ela paga 25% mais caro |
+| 6 forte do armeiro | 0 |
 
 Bosses e outros NPCs entram aqui como tipos novos.
+
+### Comércio: armeiro e mascates
+
+- **Forte do armeiro** (na costa de uma ilha, 40 a 90 células do porto, longe da sereia e das vilas, sempre no mesmo lugar para a mesma semente; zona segura de 8 células): vende as armas comuns com a raridade garantida (afixos e números sorteados). Ofertas: 0 Arpão comum $40, 1 Arpão raro $400, 2 Mosquete comum $120, 3 Mosquete raro $1.000, 4 Canhão leve comum $300, 5 Canhão leve raro $2.400. Só cobra se couber na bolsa.
+- **Mascate** (no cais de cada vila): 2 itens épicos de qualquer tipo (menos as armas dos bosses), já com encanto +1 ou +2, a $40.000 mais $15.000 por nível de encanto. Uma unidade de cada: quem comprar primeiro leva, e o item fica vendido até a troca.
+- **Encomenda** (também no mascate): N peixes de uma espécie que está a 80% ou mais do preço cheio no mercado, uns $300 em peixe (de 5 a 50). Paga o dobro do preço do mercado **na hora da entrega**, mais um baú, e a entrega pesa no mercado como uma venda. Cada perfil entrega uma vez por catálogo.
+- O catálogo de todas as vilas troca junto a cada 30 min. Ele não é salvo: o servidor que reinicia sorteia um novo.
 
 ### Ecossistema e eventos do mundo
 

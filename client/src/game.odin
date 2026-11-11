@@ -11,7 +11,8 @@ MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 106 // cardumes (70) + bags e coroas (32) + a sereia + 3 vilas
+MAX_MARKS :: 107 // cardumes (70) + bags e coroas (32) + a sereia + o forte + 3 vilas
+PEDDLER_ITEMS :: 2
 MAX_PREDATORS :: 12
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
@@ -89,6 +90,21 @@ Boss :: struct {
 	attack:     int, // ticks do ataque que está acontecendo (para desenhar)
 }
 
+// Catálogo do mascate da vila onde o barco está (vem no S_CATALOG).
+Offer :: struct {
+	item:  Item, // base = ITEM_NONE: já vendido
+	price: u32,  // centavos
+}
+
+Catalog :: struct {
+	village:       int,
+	secs:          int, // segundos até a troca
+	offers:        [PEDDLER_ITEMS]Offer,
+	quest_species: int,
+	quest_count:   int,
+	quest_done:    bool, // você já entregou neste catálogo
+}
+
 Rank_Entry :: struct {
 	name_buf: [NAME_MAX_LEN]u8,
 	name:     string,
@@ -141,6 +157,8 @@ State :: struct {
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
 	at_mermaid:    bool, // perto da pedra da sereia
 	at_village:    bool, // no cais de uma vila: vende e conserta
+	at_armory:     bool, // no cais do forte do armeiro
+	catalog:       Catalog,
 	grabbed:       bool, // preso por um tentáculo: não anda
 	mad:           bool, // louco perto do Cthulhu: o leme está invertido
 	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
@@ -887,9 +905,7 @@ on_net_message :: proc(data: []u8) {
 		n := int(read_u8(&r))
 		bag: [BAG_SIZE]Item
 		for i in 0 ..< n {
-			it := Item{base = read_u8(&r), rarity = read_u8(&r), equipped = read_u8(&r), enchant = read_u8(&r)}
-			for &a in it.affix do a = read_u8(&r)
-			for &v in it.stats do v = int(read_i16(&r))
+			it := read_item(&r)
 			if i < BAG_SIZE do bag[i] = it
 		}
 		stats: [STAT_COUNT]int
@@ -917,7 +933,29 @@ on_net_message :: proc(data: []u8) {
 		for &l in levels do l = int(read_u8(&r))
 		if !r.ok do return
 		s.boat_level = levels
+
+	case S_CATALOG:
+		c := Catalog{village = int(read_u8(&r)), secs = int(read_u16(&r))}
+		n := int(read_u8(&r))
+		for i in 0 ..< n {
+			o := Offer{item = read_item(&r), price = read_u32(&r)}
+			if i < PEDDLER_ITEMS do c.offers[i] = o
+		}
+		c.quest_species = int(read_u8(&r))
+		c.quest_count = int(read_u8(&r))
+		c.quest_done = read_u8(&r) != 0
+		if !r.ok do return
+		s.catalog = c
 	}
+}
+
+// Um item como vem na rede (17 bytes), no S_INVENTORY e no S_CATALOG.
+@(private = "file")
+read_item :: proc(r: ^Reader) -> Item {
+	it := Item{base = read_u8(r), rarity = read_u8(r), equipped = read_u8(r), enchant = read_u8(r)}
+	for &a in it.affix do a = read_u8(r)
+	for &v in it.stats do v = int(read_i16(r))
+	return it
 }
 
 @(private = "file")
@@ -940,6 +978,7 @@ read_state :: proc(r: ^Reader) {
 	s.at_village = flags & STATE_AT_VILLAGE != 0
 	s.grabbed = flags & STATE_GRABBED != 0
 	s.mad = flags & STATE_MAD != 0
+	s.at_armory = flags & STATE_AT_ARMORY != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))
