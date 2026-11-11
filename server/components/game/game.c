@@ -369,6 +369,12 @@ static int at_village(const player_t *p) {
 // mercenário, mecânico) continua só no porto.
 static int at_shop(const player_t *p) { return at_dock(p) || at_village(p) >= 0; }
 
+// No cais do forte do armeiro (r = 0: o forte não coube no mapa).
+static int at_armory(const player_t *p) {
+    const safe_zone_t *z = &g.safe_zones[ZONE_ARMORY];
+    return z->r > 0 && p->x >= z->x - 1 && p->x <= z->x + 1 && p->y >= z->y - 1 && p->y <= z->y + 1;
+}
+
 static int near_mermaid(const player_t *p) {
     const safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
     return p->x >= z->x - MERMAID_REACH && p->x <= z->x + MERMAID_REACH && p->y >= z->y - MERMAID_REACH &&
@@ -1062,6 +1068,27 @@ static void combine(int slot, uint8_t a, uint8_t b) {
     send_event(slot, EV_COMBINED, made.base, item_info(made).rarity, price);
     send_inventory(slot);
     send_rank(-1);
+}
+
+// Armeiro: vende arma nova com a raridade garantida; os números e afixos
+// saem sorteados, como num baú. Só cobra se couber na bolsa.
+static void buy_armory(int slot, uint8_t offer) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    if (!at_armory(p) || offer >= ARMORY_OFFERS) return;
+    const armory_offer_t *o = &ARMORY[offer];
+    if (pr->money < o->price) { send_event(slot, EV_NO_MONEY, FISH_NONE, 0, o->price); return; }
+    item_t item = item_in_rarity(o->base, o->rarity, o->rarity, rnd());
+    if (bag_add(pr, item) < 0) { send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0); return; }
+    pr->money -= o->price;
+    storage_save(p->profile, pr); // dinheiro gasto: salva já
+    send_event(slot, EV_BOUGHT, item.base, o->rarity, o->price);
+    send_inventory(slot);
+    send_rank(-1);
+}
+
+static void buy(int slot, uint8_t shop, uint8_t offer) {
+    if (shop == SHOP_ARMORY) buy_armory(slot, offer);
 }
 
 static int try_move(player_t *p) {
@@ -2220,6 +2247,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_COMBINE:
         if (len >= 3) combine(slot, data[1], data[2]);
+        break;
+    case C_BUY:
+        if (len >= 3) buy(slot, data[1], data[2]);
         break;
     }
 }
