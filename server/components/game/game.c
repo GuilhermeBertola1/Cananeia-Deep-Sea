@@ -42,6 +42,14 @@
 #define VILLAGE_SPACING 50    // de outra vila ou da sereia
 #define VILLAGE_SAFE_R 10
 #define VILLAGE_BONUS_PCT 25  // a mais pela espécie preferida
+
+// Forte do armeiro: numa ilha perto do porto, mas fora da zona segura dele,
+// para o jogador sair do porto para comprar a primeira arma.
+#define ARMORY_MIN_DIST 40   // do porto
+#define ARMORY_MAX_DIST 90
+#define ARMORY_SPACING 30    // da sereia e das vilas
+#define ARMORY_SAFE_R 8
+
 // Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
 // nem nas zonas seguras, então a costa é um refúgio.
 #define MAX_PREDATORS 12
@@ -252,7 +260,7 @@ typedef struct {
     uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
 } boss_t;
 
-enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
+enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_ARMORY, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
 
 // Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
 typedef struct {
@@ -341,7 +349,7 @@ static int at_dock(const player_t *p) {
 static int in_safe_zone(int x, int y) {
     for (int i = 0; i < SAFE_ZONE_COUNT; i++) {
         const safe_zone_t *z = &g.safe_zones[i];
-        if (z->r <= 0) continue; // vila que não coube no mapa
+        if (z->r <= 0) continue; // vila (ou forte) que não coube no mapa
         int dx = x - z->x, dy = y - z->y;
         if (dx * dx + dy * dy <= z->r * z->r) return 1;
     }
@@ -2074,34 +2082,56 @@ static void place_mermaid(void) {
     }
 }
 
+// Um cais na costa: célula de água com terra colada (a ilha) e pelo menos 5
+// das 8 vizinhas com água, para o barco conseguir encostar.
+static int is_coast(int x, int y) {
+    if (!tile_is_water(tile(x, y))) return 0;
+    int land = 0, water = 0;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            tile_t t = tile(x + dx, y + dy);
+            land += t == TILE_SAND || t == TILE_GRASS;
+            water += tile_is_water(t);
+        }
+    return land && water >= 5;
+}
+
 // Vilas: como a sereia, saem da semente do mapa, então ficam sempre no mesmo
-// lugar. O cais é uma célula de água com terra do lado (a costa de uma
-// ilha), e a água em volta deixa o barco encostar.
+// lugar. O cais fica na costa de uma ilha.
 static void place_villages(void) {
     g.village_count = 0;
     for (int i = 0; i < 20000 && g.village_count < VILLAGE_COUNT; i++) {
         uint32_t h = world_hash(i, 0x7111A, g.seed);
         int x = (int)(h % MAP_W), y = (int)((h >> 16) % MAP_H);
-        if (!tile_is_water(tile(x, y))) continue;
         if (!far_from(x, y, PORT_X, PORT_Y, VILLAGE_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, VILLAGE_MAX_DIST + 1)) continue;
         const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
         int ok = far_from(x, y, m->x, m->y, VILLAGE_SPACING);
         for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, VILLAGE_SPACING);
-        if (!ok) continue;
-        // Terra colada (a ilha) e pelo menos 5 das 8 vizinhas com água.
-        int land = 0, water = 0;
-        for (int dy = -1; dy <= 1; dy++)
-            for (int dx = -1; dx <= 1; dx++) {
-                if (!dx && !dy) continue;
-                tile_t t = tile(x + dx, y + dy);
-                land += t == TILE_SAND || t == TILE_GRASS;
-                water += tile_is_water(t);
-            }
-        if (!land || water < 5) continue;
+        if (!ok || !is_coast(x, y)) continue;
         village_t *v = &g.villages[g.village_count];
         *v = (village_t){(int16_t)x, (int16_t)y, (uint8_t)((h >> 8) % FISH_COUNT)};
         g.safe_zones[ZONE_VILLAGE + g.village_count] = (safe_zone_t){v->x, v->y, VILLAGE_SAFE_R};
         g.village_count++;
+    }
+}
+
+// Forte do armeiro: também sai da semente do mapa. Vem depois das vilas para
+// ficar longe delas. Se não achar lugar, fica sem forte (r = 0).
+static void place_armory(void) {
+    safe_zone_t *z = &g.safe_zones[ZONE_ARMORY];
+    *z = (safe_zone_t){0, 0, 0};
+    for (int i = 0; i < 20000; i++) {
+        uint32_t h = world_hash(i, 0xA4E10, g.seed);
+        int x = PORT_X + (int)(h % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
+        int y = PORT_Y + (int)((h >> 16) % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
+        if (!far_from(x, y, PORT_X, PORT_Y, ARMORY_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, ARMORY_MAX_DIST + 1)) continue;
+        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
+        int ok = far_from(x, y, m->x, m->y, ARMORY_SPACING);
+        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, ARMORY_SPACING);
+        if (!ok || !is_coast(x, y)) continue;
+        *z = (safe_zone_t){(int16_t)x, (int16_t)y, ARMORY_SAFE_R};
+        return;
     }
 }
 
@@ -2118,6 +2148,7 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
     place_mermaid();
     place_villages();
+    place_armory();
     memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
