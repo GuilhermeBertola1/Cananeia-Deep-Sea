@@ -1606,7 +1606,7 @@ static void new_catalog(void) {
         // Encomenda: uma espécie que não está saturada no mercado.
         uint8_t fresh[FISH_COUNT], n = 0;
         for (int sp = 0; sp < FISH_COUNT; sp++)
-            if (price_cents(sp) * 100 >= SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
+            if (price_cents(sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
         uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
         int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
         v->quest_species = sp;
@@ -1971,7 +1971,7 @@ static void boss_killed(void) {
         profile_t *pr = prof(&g.players[i]);
         pr->money += share;
         send_event(i, EV_BOSS_REWARD, b->kind, b->dmg[i], share);
-        if (i != mvp && b->dmg[i] * 100 >= total * BOSS_HELPER_PCT) give_random_item(i);
+        if (i != mvp && (uint32_t)b->dmg[i] * 100 >= total * BOSS_HELPER_PCT) give_random_item(i);
         if (i == mvp) send_inventory(i);
         storage_save(g.players[i].profile, pr);
     }
