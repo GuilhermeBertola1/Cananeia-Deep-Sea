@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.1.0 (2026-11-11): comércio
+
+- **Forte do armeiro** (`A`), numa ilha a uns 40 a 90 células do porto, sempre no mesmo lugar para a mesma semente, com zona segura em volta. **F** abre a loja: Arpão, Mosquete e Canhão leve, cada um em comum ou raro ($40/$400, $120/$1.000, $300/$2.400). A raridade é garantida, os afixos e os números saem sorteados como num baú, e só cobra se couber na bolsa. Longe dele, **F** diz para que lado e a quantas células ele fica
+- **Mascate** (`K`) no cais de cada vila, também na tecla **F**:
+  - 2 itens **épicos já encantados** (+1 ou +2), de qualquer tipo menos as armas dos bosses, a $40.000 mais $15.000 por nível de encanto. Só tem um de cada: quem comprar primeiro leva
+  - Uma **encomenda** de peixe (uns $300 em peixe, de uma espécie que não está saturada no mercado). **G** entrega: paga o dobro do preço do mercado **na hora da entrega**, mais um baú, e a entrega derruba o preço como uma venda. Cada capitão entrega uma vez por catálogo
+  - O catálogo de todas as vilas troca junto a **cada 30 minutos**, com aviso para todos, e a banca mostra a contagem
+- Compras e entregas descontam o dinheiro e atualizam o ranking na hora
+- O mecânico usa a mesma função nova das lojas (`item_in_rarity`) para sortear o item que sai; para o jogador nada muda
+- Protocolo versão 10: `C_BUY`, `C_DELIVER`, a mensagem `S_CATALOG`, o bit 7 do `S_STATE` (no forte), a marca 6 (forte) e os eventos 43 a 48
+- Os perfis da v1.0 continuam valendo, porque o `profile_t` não mudou. O catálogo dos mascates não é salvo: se o servidor reiniciar, sai um novo
+- A partir desta versão, o servidor não precisa mais caber no ESP32. A v1.0 é a última testada lá com 8 jogadores
+
 ## v1.0.0 (2026-11-10): lançamento
 
 - **Aguenta 8 jogadores no ESP32:** três jeitos de o servidor travar ou derrubar gente foram corrigidos

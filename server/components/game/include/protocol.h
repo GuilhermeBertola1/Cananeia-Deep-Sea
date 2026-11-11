@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 9
+#define PROTOCOL_VERSION 10
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -24,6 +24,8 @@ enum {
     C_MERC = 0x09,
     C_MERMAID = 0x0A, // u8 ação (MERMAID_*)
     C_COMBINE = 0x0B, // u8 índice a, u8 índice b
+    C_BUY = 0x0C,     // u8 loja (SHOP_*), u8 oferta
+    C_DELIVER = 0x0D, // entrega a encomenda do mascate da vila onde está
 };
 
 // Servidor -> cliente
@@ -38,6 +40,7 @@ enum {
     S_PRICES = 0x88,  // u16 centavos[FISH_COUNT]
     S_INVENTORY = 0x89,
     S_BOAT = 0x8A,
+    S_CATALOG = 0x8B, // catálogo do mascate da vila onde o barco está
 };
 
 enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4, ERR_BAD_PASSWORD = 5, ERR_WRONG_PASSWORD = 6 };
@@ -52,7 +55,10 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_BITTEN = 33, EV_PREDATOR_HIT = 34, EV_PREDATOR_KILL = 35,
        EV_WORLD_START = 36, EV_WORLD_END = 37,
        EV_BOSS_START = 38, EV_BOSS_HIT = 39, EV_BOSS_END = 40, EV_BOSS_REWARD = 41,
-       EV_WEATHER = 42 };
+       EV_WEATHER = 42, EV_BOUGHT = 43,
+       EV_SOLD_OUT = 44, EV_CATALOG = 45, EV_QUEST_DONE = 46, EV_QUEST_WAIT = 47, EV_QUEST_MISSING = 48 };
+// Lojas do C_BUY: o armeiro, e (a partir do passo 4) o mascate de cada vila.
+enum { SHOP_ARMORY = 0, SHOP_VILLAGE = 1 };
 // Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
 enum { WORLD_NONE = 0, WORLD_STORM = 1, WORLD_SQUID = 2, WORLD_GHOST = 3 };
 // Clima, no mapa todo (no EV_WEATHER, `espécie` é o clima novo e `quantidade`, os segundos).
@@ -65,10 +71,10 @@ enum { BOSS_NONE = 0, BOSS_MEGALODON = 1, BOSS_KRAKEN = 2, BOSS_CTHULHU = 3, BOS
 // ou KILLER_BOSS + tipo do boss.
 #define KILLER_PREDATOR 0x80
 #define KILLER_BOSS 0xA0
-enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5 };
+enum { MARK_SCHOOL = 1, MARK_BAG = 2, MARK_CROWN = 3, MARK_MERMAID = 4, MARK_VILLAGE = 5, MARK_ARMORY = 6 };
 enum { MERMAID_TALK = 0, MERMAID_GIVE_UP = 1 };
 enum { STATE_AT_DOCK = 1 << 0, STATE_BROKEN = 1 << 1, STATE_SAFE = 1 << 2, STATE_AT_MERMAID = 1 << 3,
-       STATE_AT_VILLAGE = 1 << 4, STATE_GRABBED = 1 << 5, STATE_MAD = 1 << 6 };
+       STATE_AT_VILLAGE = 1 << 4, STATE_GRABBED = 1 << 5, STATE_MAD = 1 << 6, STATE_AT_ARMORY = 1 << 7 };
 
 // Escritor de bytes com limite: se estourar, `ok` vira 0 e nada é enviado.
 typedef struct {

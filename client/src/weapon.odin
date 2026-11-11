@@ -50,3 +50,21 @@ equipped_weapon :: proc() -> (w: Weapon, base: u8, ok: bool) {
 	}
 	return {}, 0, false
 }
+
+// Catálogo do armeiro: igual ao ARMORY de server/components/game/weapon.c.
+// A posição na lista é o número da oferta no C_BUY.
+Armory_Offer :: struct {
+	base:   u8,
+	rarity: u8,
+	price:  u32, // centavos
+}
+
+ARMORY_OFFERS :: 6
+ARMORY := [ARMORY_OFFERS]Armory_Offer {
+	{1, RARITY_COMMON, 4000},
+	{1, RARITY_RARE, 40000},
+	{2, RARITY_COMMON, 12000},
+	{2, RARITY_RARE, 100000},
+	{3, RARITY_COMMON, 30000},
+	{3, RARITY_RARE, 240000},
+}

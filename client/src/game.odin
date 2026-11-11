@@ -11,7 +11,8 @@ MAX_PLAYERS :: 8
 MAX_SCHOOLS :: 70
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 106 // cardumes (70) + bags e coroas (32) + a sereia + 3 vilas
+MAX_MARKS :: 107 // cardumes (70) + bags e coroas (32) + a sereia + o forte + 3 vilas
+PEDDLER_ITEMS :: 2
 MAX_PREDATORS :: 12
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
@@ -89,6 +90,22 @@ Boss :: struct {
 	attack:     int, // ticks do ataque que está acontecendo (para desenhar)
 }
 
+// Catálogo do mascate da vila onde o barco está (vem no S_CATALOG).
+Offer :: struct {
+	item:  Item, // base = ITEM_NONE: já vendido
+	price: u32,  // centavos
+}
+
+Catalog :: struct {
+	village:       int,
+	secs:          int, // segundos até a troca
+	offers:        [PEDDLER_ITEMS]Offer,
+	quest_species: int,
+	quest_count:   int,
+	quest_done:    bool, // você já entregou neste catálogo
+	ok:            bool, // false até chegar o catálogo da vila onde o barco está
+}
+
 Rank_Entry :: struct {
 	name_buf: [NAME_MAX_LEN]u8,
 	name:     string,
@@ -141,6 +158,8 @@ State :: struct {
 	safe:          bool, // zona segura: ninguém atira nem toma tiro
 	at_mermaid:    bool, // perto da pedra da sereia
 	at_village:    bool, // no cais de uma vila: vende e conserta
+	at_armory:     bool, // no cais do forte do armeiro
+	catalog:       Catalog,
 	grabbed:       bool, // preso por um tentáculo: não anda
 	mad:           bool, // louco perto do Cthulhu: o leme está invertido
 	stock_pct:     int,  // peixe que sobrou na região onde o barco está (0 a 100)
@@ -184,6 +203,8 @@ State :: struct {
 	// interface
 	shop_open:     bool,
 	yard_open:     bool,
+	armory_open:   bool,
+	peddler_open:  bool,
 	inv_open:      bool,
 	merc_open:     bool,
 	mermaid_open:  bool,
@@ -244,6 +265,8 @@ update :: proc() {
 		draw_hud()
 		if s.shop_open do draw_shop()
 		if s.yard_open do draw_shipyard()
+		if s.armory_open do draw_armory()
+		if s.peddler_open do draw_peddler()
 		if s.merc_open do draw_mercenary()
 		if s.mermaid_open do draw_mermaid()
 		if s.mech_open do draw_mechanic()
@@ -311,7 +334,7 @@ start_offline :: proc() {
 
 // Alguma janela aberta (NPC ou inventário): o barco não anda nem atira.
 menu_open :: proc() -> bool {
-	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open || s.mech_open
+	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open || s.mech_open || s.armory_open || s.peddler_open
 }
 
 // Fecha as janelas dos NPCs. O inventário fica como está.
@@ -319,6 +342,8 @@ menu_open :: proc() -> bool {
 close_npcs :: proc() {
 	s.shop_open = false
 	s.yard_open = false
+	s.armory_open = false
+	s.peddler_open = false
 	s.merc_open = false
 	s.mermaid_open = false
 	s.mech_open = false
@@ -413,6 +438,22 @@ update_playing :: proc() {
 			add_log("O mecânico (C) fica no porto, atrás do lojista.")
 		}
 	}
+	// F: o armeiro, no forte dele, ou o mascate, no cais de uma vila.
+	if rl.IsKeyPressed(.F) && !s.inv_open {
+		if s.armory_open || s.peddler_open {
+			s.armory_open = false
+			s.peddler_open = false
+		} else if s.at_armory {
+			close_npcs()
+			s.armory_open = true
+		} else if s.at_village {
+			close_npcs()
+			s.peddler_open = true
+		} else if mx, my, ok := armory_spot(); ok {
+			dir, dist := compass(mx, my)
+			add_log("O armeiro (A) fica num forte a %d células para %s.", dist, dir)
+		}
+	}
 	if rl.IsKeyPressed(.ESCAPE) {
 		close_npcs()
 		s.big_map = false
@@ -431,6 +472,17 @@ update_playing :: proc() {
 		}
 		if rl.IsKeyPressed(.R) do send_repair()
 	}
+	if s.armory_open {
+		for i in 0 ..< ARMORY_OFFERS {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do send_buy(SHOP_ARMORY, u8(i))
+		}
+	}
+	if s.peddler_open && s.catalog.ok {
+		for i in 0 ..< PEDDLER_ITEMS {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do send_buy(u8(SHOP_VILLAGE + s.catalog.village), u8(i))
+		}
+		if rl.IsKeyPressed(.G) do send_deliver()
+	}
 	if s.merc_open && rl.IsKeyPressed(.T) do send_merc()
 	if s.mech_open do update_mechanic()
 	if s.mermaid_open {
@@ -444,6 +496,11 @@ update_playing :: proc() {
 		s.mech_open = false
 	}
 	if !s.at_mermaid do s.mermaid_open = false
+	if !s.at_armory do s.armory_open = false
+	if !s.at_village {
+		s.peddler_open = false
+		s.catalog.ok = false // o da próxima vila chega quando o barco encostar
+	}
 }
 
 // Mecânico: W/S escolhem, Enter marca o primeiro item e Enter no segundo
@@ -549,6 +606,14 @@ money_text :: proc(cents: u32) -> string {
 // Nome de quem a sereia mandou afundar.
 mission_target :: proc() -> string {
 	return string(s.mission_buf[:s.mission_len])
+}
+
+// Onde fica o forte do armeiro (vem nas marcas do minimapa).
+armory_spot :: proc() -> (x, y: i32, ok: bool) {
+	for m in s.marks[:s.mark_count] {
+		if m.kind == MARK_ARMORY do return m.x, m.y, true
+	}
+	return 0, 0, false
 }
 
 // Espécie preferida da vila em cujo cais o barco está (vem na marca do minimapa).
@@ -679,7 +744,11 @@ on_net_message :: proc(data: []u8) {
 				add_log("Baú! %s (%s). Aperte I para ver.", item_name(u8(species)), rarity_name(u8(count)))
 			}
 		case EV_BAG_FULL:
-			add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
+			if s.armory_open || s.peddler_open {
+				add_log("A bolsa está cheia. Jogue algo fora (I) antes de comprar.")
+			} else {
+				add_log("Achou um baú, mas a bolsa está cheia. Jogue algo fora (I).")
+			}
 		case EV_CRASH:
 			play_sfx(.Hurt)
 			add_popup({255, 107, 107, 255}, "-%d vida", count)
@@ -694,7 +763,10 @@ on_net_message :: proc(data: []u8) {
 			who := "Lojista da vila" if s.at_village else "Estaleiro"
 			add_log("%s: consertou %d de vida por %s.", who, count, money_text(value))
 		case EV_NO_MONEY:
-			who := "Mecânico" if s.mech_open else "Estaleiro"
+			who := "Estaleiro"
+			if s.mech_open do who = "Mecânico"
+			if s.armory_open do who = "Armeiro"
+			if s.peddler_open do who = "Mascate"
 			add_log("%s: \"Isso custa %s, marujo. Volte com o dinheiro.\"", who, money_text(value))
 		case EV_HIT:
 			play_sfx(.Hit)
@@ -772,6 +844,25 @@ on_net_message :: proc(data: []u8) {
 			// No mecânico, `species` é o tipo do item novo e `count` a raridade.
 			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
 			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
+		case EV_BOUGHT:
+			// No armeiro e no mascate, `species` é o tipo do item e `count` a raridade.
+			play_sfx(.Item)
+			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
+			add_log("Comprou %s %s por %s. Equipe no inventário (I).", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
+		case EV_SOLD_OUT:
+			add_log("Mascate: \"Esse já foi, marujo. Volte na próxima troca.\"")
+		case EV_CATALOG:
+			play_sfx(.Alert)
+			add_popup(COLOR_PEDDLER, "Mascates com mercadoria nova!")
+			add_log("Os mascates das vilas trocaram a mercadoria. Próxima troca em %d min.", count)
+		case EV_QUEST_DONE:
+			play_sfx(.Coin)
+			add_popup(COLOR_PEDDLER, "Encomenda: +%s", money_text(value))
+			add_log("Mascate: \"Encomenda certinha!\" %d %s por %s, e um baú.", count, species_name(species), money_text(value))
+		case EV_QUEST_WAIT:
+			add_log("Mascate: \"Essa você já me entregou. Volte na próxima troca.\"")
+		case EV_QUEST_MISSING:
+			add_log("Mascate: \"Preciso de %d %s, e você só tem %d.\"", count, species_name(species), value)
 		case EV_CANT_COMBINE:
 			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
 		case EV_BITTEN:
@@ -887,9 +978,7 @@ on_net_message :: proc(data: []u8) {
 		n := int(read_u8(&r))
 		bag: [BAG_SIZE]Item
 		for i in 0 ..< n {
-			it := Item{base = read_u8(&r), rarity = read_u8(&r), equipped = read_u8(&r), enchant = read_u8(&r)}
-			for &a in it.affix do a = read_u8(&r)
-			for &v in it.stats do v = int(read_i16(&r))
+			it := read_item(&r)
 			if i < BAG_SIZE do bag[i] = it
 		}
 		stats: [STAT_COUNT]int
@@ -917,7 +1006,30 @@ on_net_message :: proc(data: []u8) {
 		for &l in levels do l = int(read_u8(&r))
 		if !r.ok do return
 		s.boat_level = levels
+
+	case S_CATALOG:
+		c := Catalog{village = int(read_u8(&r)), secs = int(read_u16(&r))}
+		n := int(read_u8(&r))
+		for i in 0 ..< n {
+			o := Offer{item = read_item(&r), price = read_u32(&r)}
+			if i < PEDDLER_ITEMS do c.offers[i] = o
+		}
+		c.quest_species = int(read_u8(&r))
+		c.quest_count = int(read_u8(&r))
+		c.quest_done = read_u8(&r) != 0
+		if !r.ok do return
+		c.ok = true
+		s.catalog = c
 	}
+}
+
+// Um item como vem na rede (17 bytes), no S_INVENTORY e no S_CATALOG.
+@(private = "file")
+read_item :: proc(r: ^Reader) -> Item {
+	it := Item{base = read_u8(r), rarity = read_u8(r), equipped = read_u8(r), enchant = read_u8(r)}
+	for &a in it.affix do a = read_u8(r)
+	for &v in it.stats do v = int(read_i16(r))
+	return it
 }
 
 @(private = "file")
@@ -940,6 +1052,7 @@ read_state :: proc(r: ^Reader) {
 	s.at_village = flags & STATE_AT_VILLAGE != 0
 	s.grabbed = flags & STATE_GRABBED != 0
 	s.mad = flags & STATE_MAD != 0
+	s.at_armory = flags & STATE_AT_ARMORY != 0
 	s.hp = int(read_u16(r))
 	s.hp_max = int(read_u16(r))
 	s.reload = int(read_u8(r))

@@ -94,3 +94,16 @@ item_info_t item_info_enchanted(item_t item, uint8_t level) {
     }
     return info;
 }
+
+item_t item_in_rarity(uint8_t base, uint8_t min, uint8_t max, uint32_t seed) {
+    item_t item = item_new(base, seed);
+    if (item_is_unique(base)) return item; // arma de boss já é sempre lendária
+    // Lendário sai 1 vez em 100, então 100 mil tentativas sobram.
+    for (int tries = 0; tries < 100000; tries++) {
+        uint8_t r = item_info(item).rarity;
+        if (r >= min && r <= max) break;
+        seed = seed * 1664525u + 1013904223u; // próxima semente (LCG)
+        item = item_new(base, seed);
+    }
+    return item;
+}

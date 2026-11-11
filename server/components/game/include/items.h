@@ -93,3 +93,7 @@ item_info_t item_info(item_t item);
 // O mesmo item_info, com o encanto por cima. O encanto não está na semente:
 // fica guardado no perfil, ao lado do item (profile_t.enchant).
 item_info_t item_info_enchanted(item_t item, uint8_t level);
+// Um item novo cuja raridade fica entre `min` e `max` (inclusive). Tenta a
+// semente dada e, se a raridade não bater, vai para a próxima, até achar.
+// Usado pelo mecânico (raridade mínima) e pelas lojas (raridade exata).
+item_t item_in_rarity(uint8_t base, uint8_t min, uint8_t max, uint32_t seed);

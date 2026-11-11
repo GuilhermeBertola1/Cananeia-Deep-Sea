@@ -5,14 +5,14 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 ## Como fazer cada nova versão
 
 1. Atualize o código: `git checkout main && git pull`.
-2. Crie um branch para a versão: `git checkout -b v1.1-nome-da-versao`.
+2. Crie um branch para a versão: `git checkout -b v1.2-nome-da-versao`.
 3. Um commit por passo, no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português: `tipo(escopo): descrição`. Exemplos: `feat(pesca): rede pega dois peixes por vez`, `fix(rede): ignorar mensagem curta`. Tipos: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`, `perf`. Escopos comuns: `cliente`, `servidor`, `esp32`, `protocolo`, `mapa`, `pesca`, `loja`.
 4. Se mudar mensagens da rede, atualize **os dois lados** (`protocol.h` e `protocol.odin`), o `docs/protocol.md` e aumente `PROTOCOL_VERSION`.
 5. Se mudar a geração do mapa, mude `world.c` **e** `world.odin` juntos. O checksum no `S_WELCOME` acusa se ficaram diferentes.
-6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e, quando der, no ESP32. Antes de lançar, rode os robôs (`server\host\bots.exe`, veja o README) por 1 hora no ESP32.
+6. Teste no PC com duas abas (`server\host\cananeia-host.exe`) e rode os robôs (`server\host\bots.exe`, veja o README). Desde a v1.1 o servidor não precisa mais caber no ESP32; se a versão ainda roda lá, teste também.
 7. Escreva o que mudou no `CHANGELOG.md`.
 8. Abra um Pull Request no GitHub. O Bertola revisa o código antes de qualquer merge na `main`.
-9. Crie a tag da versão: `git tag v1.1.0 && git push --tags`.
+9. Crie a tag da versão: `git tag v1.2.0 && git push --tags`.
 10. Campo novo no `profile_t` vai sempre no fim, e o `profile_upgrade` em `storage.h` aprende a converter o perfil da versão anterior. Assim ninguém perde a conta.
 
 ## Visão geral
@@ -29,6 +29,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.8 | Bosses (Cthulhu, Megalodon, Kraken) e armas únicas | Pronta |
 | v0.9 | Shaders de água, luz e clima; polimento | Pronta |
 | v1.0 | Lançamento: 8 jogadores no ESP32 | Pronta |
+| v1.1 | Comércio: armeiro e mascates nas vilas | Pronta |
+| v1.2 | Mapa procedural montado por regiões | Próxima |
 
 ---
 
@@ -144,3 +146,25 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 - [x] Perfis da v0.9 continuam valendo (o `profile_t` não mudou)
 
 **Pronta quando:** `bots.exe` com 8 robôs no ESP32 por 60 minutos termina com `PASSOU`, e o `heap_min` do `/status` para de cair depois dos primeiros minutos.
+
+## v1.1: Comércio (pronta)
+
+**Objetivo:** dá para comprar arma, e as vilas viram um lugar para voltar de tempos em tempos.
+
+- [x] Forte do armeiro numa ilha perto do porto, com arpão, mosquete e canhão em comum ou raro
+- [x] Mascate em cada vila com 2 itens épicos encantados, um de cada, e catálogo que troca a cada 30 minutos
+- [x] Encomenda de peixe do mascate, paga pelo preço do mercado na hora da entrega
+- [x] Protocolo v10 com o forte e o catálogo
+- [x] Perfis da v1.0 continuam valendo (o `profile_t` não mudou)
+
+**Pronta quando:** um capitão novo compra um arpão no forte e equipa; dois capitães na mesma vila veem o mesmo item sumir quando um compra; e a encomenda entregue logo depois de outra paga menos.
+
+## v1.2: Mapa por regiões (próxima)
+
+**Objetivo:** o mapa deixa de ser um quadro fixo de 512 × 512 gerado todo de uma vez. Ele é montado por regiões, geradas só quando alguém chega perto, para poder ficar bem maior.
+
+- [ ] Desenhar como as regiões são montadas e mandadas para o cliente
+- [ ] Servidor e cliente geram a mesma região a partir da semente (como hoje com `world.c` e `world.odin`)
+- [ ] Porto, sereia, vilas e forte continuam no mesmo lugar para a mesma semente
+
+O plano em passos sai antes de começar a versão.

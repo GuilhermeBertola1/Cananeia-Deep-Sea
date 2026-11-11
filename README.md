@@ -5,7 +5,7 @@ Jogo online em ASCII: você navega um barco por um oceano enorme com ilhas, pesc
 Segue a especificação **SCOM 3**:
 
 - **Cliente:** [Odin](https://odin-lang.org) + [raylib](https://www.raylib.com), compilado para **WebAssembly**. Só caracteres ASCII, sem texturas externas, desenhado em camadas (oceano, ilhas, vida marinha, barcos, efeitos, céu).
-- **Servidor:** **ESP32-S3** (8 MB de PSRAM, 16 MB de flash) com **ESP-IDF 6.1**. Ele é a autoridade do jogo e também serve a página do cliente para quem se conecta.
+- **Servidor:** **ESP32-S3** (8 MB de PSRAM, 16 MB de flash) com **ESP-IDF 6.1**, ou o servidor do PC, que roda o mesmo núcleo em C. Ele é a autoridade do jogo e também serve a página do cliente para quem se conecta. A v1.0 é a última testada no ESP32 com 8 jogadores; a partir da v1.1 o servidor não precisa mais caber nele.
 - **Rede:** WebSocket com mensagens binárias compactas ([docs/protocol.md](docs/protocol.md)).
 - **Mapa:** gerado pela semente dos dois lados, só com inteiros, então o ESP32 e o navegador chegam no mesmo oceano sem mandar o mapa pela rede.
 
@@ -22,6 +22,7 @@ O protótipo antigo em TypeScript está no branch `prototipo-ts`.
 | R | na loja de uma vila: consertar o barco |
 | B | mercenário `M` (no cais): T entrega as bags e coroas |
 | C | mecânico `C` (no porto): Enter marca um item, Enter no segundo junta os dois |
+| F | armeiro `A` (no forte): 1 a 6 compram uma arma. Mascate `K` (numa vila): 1 e 2 compram, G entrega a encomenda |
 | G / X | na sereia: girar a roleta ou entregar a coroa / desistir da missão |
 | Clique / Espaço | atirar na mira `+` (com uma arma equipada) |
 | M | mapa grande |
@@ -40,6 +41,8 @@ No porto, o mercenário troca as bags dos outros pelos peixes delas e paga uma r
 O mar está vivo. Cada região tem uma quantidade de peixe: pesque demais no mesmo lugar e ela esvazia (o painel mostra quanto sobrou), depois se recupera sozinha. Em outras ilhas há vilas de pescadores (`V`) que compram peixe, pagam mais pela espécie preferida e consertam o barco. Tubarões (`^`) rondam o mar fundo atrás de barcos fracos. De tempos em tempos acontece um evento para todos: uma tempestade que empurra o barco mas dobra a pesca, uma maré de lulas, ou um navio fantasma que atira em quem chegar perto e divide o tesouro entre quem ajudou a afundá-lo.
 
 E às vezes sobe um boss, anunciado para todos, com uma vida só para o servidor inteiro: o Megalodon, que dá investidas no mar fundo; o Kraken, que agarra e puxa quem chega perto; ou o Cthulhu, que atira em volta e enlouquece o leme de quem se aproxima. O dinheiro é dividido pelo dano, e quem mais bateu leva a arma única do boss: o Dente que conserta o barco, o Tentáculo que prende o alvo ou o Cajado que atira em leque.
+
+Arma também se compra: num forte numa ilha perto do porto fica o armeiro (`A`), com arpão, mosquete e canhão em comum ou raro. Em cada vila mora um mascate (`K`) que vende itens épicos já encantados, um de cada (quem chegar primeiro leva), e encomenda peixe pagando o dobro do mercado. A mercadoria dele troca a cada 30 minutos, em todas as vilas juntas.
 
 O mar balança, o dia vira noite na mesma hora para todo mundo e, no escuro, só se enxerga até onde vai a lanterna do barco e o facho dos faróis. O clima muda para todos: a chuva faz o peixe subir, e a neblina esconde quem está a mais de 16 células. Tudo tem som, gerado pelo próprio jogo (N desliga).
 
