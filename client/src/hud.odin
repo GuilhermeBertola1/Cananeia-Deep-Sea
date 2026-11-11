@@ -54,6 +54,7 @@ draw_map_at :: proc(x, y, size: f32) {
 		case MARK_CROWN: dot(x, y, k, m.x, m.y, max(2, 1.5 * k), COLOR_ACCENT)
 		case MARK_MERMAID: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_MERMAID)
 		case MARK_VILLAGE: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_VILLAGE)
+		case MARK_ARMORY: dot(x, y, k, m.x, m.y, max(2, 2 * k), COLOR_ARMORY)
 		}
 	}
 	// Evento do mundo: um círculo do tamanho da área. Bichos perto do barco: pontinhos.
@@ -235,7 +236,7 @@ draw_hud :: proc() {
 		text(m, sw - 14 - text_width(m, 20), y, 20, color)
 		y += 22
 	}
-	text("B mercenário  C mecânico  E sereia (S, no mar)", x, sh - 46, 10, COLOR_QUIET)
+	text("B mercenário  C mecânico  E sereia (S, no mar)  F armeiro (A)", x, sh - 46, 10, COLOR_QUIET)
 	text("Clique ou Espaço atira na mira (+)", x, sh - 32, 10, COLOR_QUIET)
 	text("WASD/setas navega  E lojista  U estaleiro  I inventário  Esc fecha", x, sh - 18, 10, COLOR_QUIET)
 
@@ -244,6 +245,7 @@ draw_hud :: proc() {
 	tip := ""
 	if s.at_dock do tip = "No cais. E: lojista (L)  U: estaleiro (E)  B: mercenário (M)  C: mecânico (C)"
 	if s.at_mermaid do tip = "A sereia (S) está ouvindo. E: falar com ela"
+	if s.at_armory do tip = "Forte do armeiro. F: comprar armas"
 	if fav, ok := village_fav(); ok && s.at_village {
 		tip = fmt.tprintf("Vila de pescadores. E: lojista (paga +25%% por %s)", species_name(fav))
 	}
@@ -401,6 +403,40 @@ draw_shipyard :: proc() {
 	}
 	cy += 34
 	text("Número compra o próximo nível.  U ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
+}
+
+// --- armeiro ---------------------------------------------------------------------
+
+draw_armory :: proc() {
+	world_w := f32(rl.GetScreenWidth() - PANEL_W)
+	w: f32 = 680
+	h: f32 = 170 + ARMORY_OFFERS * 30
+	x := (world_w - w) / 2
+	y := (f32(rl.GetScreenHeight()) - h) / 2
+	rl.DrawRectangleV({x, y}, {w, h}, COLOR_PANEL)
+	rl.DrawRectangleLinesEx({x, y, w, h}, 2, COLOR_ARMORY)
+
+	cx := x + 20
+	cy := y + 16
+	text("ARMEIRO", cx, cy, 20, COLOR_ARMORY)
+	cy += 26
+	text("\"Arma nova, de fábrica. A raridade eu garanto, o resto é sorte.\"", cx, cy, 20, COLOR_QUIET)
+	cy += 36
+
+	// Cada oferta: nome e raridade, alcance e recarga da arma, e o preço.
+	for o, i in ARMORY {
+		text(fmt.tprintf("[%d] %s (%s)", i + 1, item_name(o.base), rarity_name(o.rarity)), cx, cy, 20, rarity_color(o.rarity))
+		if wp, ok := weapon_of(o.base); ok {
+			text(fmt.tprintf("alcance %d  recarga %.1f s", wp.range, f32(wp.reload) / 10), cx + 300, cy, 20, COLOR_QUIET)
+		}
+		price := money_text(o.price)
+		text(price, x + w - 20 - text_width(price, 20), cy, 20, COLOR_ACCENT if s.money >= o.price else COLOR_QUIET)
+		cy += 30
+	}
+	cy += 10
+	text("Número compra. A arma vai para a bolsa (I para equipar).", cx, cy, 20, COLOR_INK)
+	cy += 30
+	text("F ou Esc fecha.", cx, cy, 20, COLOR_QUIET)
 }
 
 // --- mercenário -----------------------------------------------------------------

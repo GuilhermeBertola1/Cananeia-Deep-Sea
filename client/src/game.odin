@@ -202,6 +202,7 @@ State :: struct {
 	// interface
 	shop_open:     bool,
 	yard_open:     bool,
+	armory_open:   bool,
 	inv_open:      bool,
 	merc_open:     bool,
 	mermaid_open:  bool,
@@ -262,6 +263,7 @@ update :: proc() {
 		draw_hud()
 		if s.shop_open do draw_shop()
 		if s.yard_open do draw_shipyard()
+		if s.armory_open do draw_armory()
 		if s.merc_open do draw_mercenary()
 		if s.mermaid_open do draw_mermaid()
 		if s.mech_open do draw_mechanic()
@@ -329,7 +331,7 @@ start_offline :: proc() {
 
 // Alguma janela aberta (NPC ou inventário): o barco não anda nem atira.
 menu_open :: proc() -> bool {
-	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open || s.mech_open
+	return s.shop_open || s.yard_open || s.inv_open || s.merc_open || s.mermaid_open || s.mech_open || s.armory_open
 }
 
 // Fecha as janelas dos NPCs. O inventário fica como está.
@@ -337,6 +339,7 @@ menu_open :: proc() -> bool {
 close_npcs :: proc() {
 	s.shop_open = false
 	s.yard_open = false
+	s.armory_open = false
 	s.merc_open = false
 	s.mermaid_open = false
 	s.mech_open = false
@@ -431,6 +434,18 @@ update_playing :: proc() {
 			add_log("O mecânico (C) fica no porto, atrás do lojista.")
 		}
 	}
+	// F: o armeiro, no forte dele.
+	if rl.IsKeyPressed(.F) && !s.inv_open {
+		if s.armory_open {
+			s.armory_open = false
+		} else if s.at_armory {
+			close_npcs()
+			s.armory_open = true
+		} else if mx, my, ok := armory_spot(); ok {
+			dir, dist := compass(mx, my)
+			add_log("O armeiro (A) fica num forte a %d células para %s.", dist, dir)
+		}
+	}
 	if rl.IsKeyPressed(.ESCAPE) {
 		close_npcs()
 		s.big_map = false
@@ -449,6 +464,11 @@ update_playing :: proc() {
 		}
 		if rl.IsKeyPressed(.R) do send_repair()
 	}
+	if s.armory_open {
+		for i in 0 ..< ARMORY_OFFERS {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do send_buy(SHOP_ARMORY, u8(i))
+		}
+	}
 	if s.merc_open && rl.IsKeyPressed(.T) do send_merc()
 	if s.mech_open do update_mechanic()
 	if s.mermaid_open {
@@ -462,6 +482,7 @@ update_playing :: proc() {
 		s.mech_open = false
 	}
 	if !s.at_mermaid do s.mermaid_open = false
+	if !s.at_armory do s.armory_open = false
 }
 
 // Mecânico: W/S escolhem, Enter marca o primeiro item e Enter no segundo
@@ -567,6 +588,14 @@ money_text :: proc(cents: u32) -> string {
 // Nome de quem a sereia mandou afundar.
 mission_target :: proc() -> string {
 	return string(s.mission_buf[:s.mission_len])
+}
+
+// Onde fica o forte do armeiro (vem nas marcas do minimapa).
+armory_spot :: proc() -> (x, y: i32, ok: bool) {
+	for m in s.marks[:s.mark_count] {
+		if m.kind == MARK_ARMORY do return m.x, m.y, true
+	}
+	return 0, 0, false
 }
 
 // Espécie preferida da vila em cujo cais o barco está (vem na marca do minimapa).
@@ -790,6 +819,11 @@ on_net_message :: proc(data: []u8) {
 			// No mecânico, `species` é o tipo do item novo e `count` a raridade.
 			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
 			add_log("Mecânico: \"Pronto! %s %s, por %s.\"", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
+		case EV_BOUGHT:
+			// No armeiro e no mascate, `species` é o tipo do item e `count` a raridade.
+			play_sfx(.Item)
+			add_popup(rarity_color(u8(count)), "%s %s!", item_name(u8(species)), rarity_name(u8(count)))
+			add_log("Comprou %s %s por %s. Equipe no inventário (I).", item_name(u8(species)), rarity_name(u8(count)), money_text(value))
 		case EV_CANT_COMBINE:
 			add_log("Mecânico: \"Só junto dois itens do mesmo tipo, marujo.\"")
 		case EV_BITTEN:
