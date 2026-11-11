@@ -37,6 +37,19 @@ int main(void) {
         print_item(it);
         if (item_info(it).rarity != RARITY_LEGENDARY) ok = 0;
     }
+    // item_in_rarity: a raridade tem que cair sempre dentro da faixa pedida.
+    printf("\nRaridade pedida (item_in_rarity):\n");
+    for (uint8_t r = 0; r < RARITY_COUNT; r++) {
+        for (uint32_t i = 0; i < 2000; i++) {
+            item_t it = item_in_rarity((uint8_t)(1 + i % (ITEM_DROP_COUNT - 1)), r, r, i * 40503u + 7);
+            if (item_info(it).rarity != r) ok = 0;
+        }
+        printf("  %-9s 2000 itens, todos %s\n", RARITY[r], RARITY[r]);
+    }
+    for (uint32_t i = 0; i < 2000; i++) {
+        item_t it = item_in_rarity(ITEM_ARPAO, RARITY_RARE, RARITY_LEGENDARY, i + 1);
+        if (item_info(it).rarity < RARITY_RARE) ok = 0;
+    }
     puts(ok ? "\nMesma semente gera sempre o mesmo item." : "\nERRO: item mudou com a mesma semente!");
     return ok ? 0 : 1;
 }

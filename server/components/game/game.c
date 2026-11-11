@@ -1039,9 +1039,8 @@ static void combine(int slot, uint8_t a, uint8_t b) {
     uint32_t price = COMBINE_PRICE[want];
     if (pr->money < price) { send_event(slot, EV_NO_MONEY, FISH_NONE, 0, price); return; }
 
-    // Sorteia sementes até sair a raridade pedida (lendário é 1 em 100).
-    item_t made = item_new(ia.base, rnd());
-    for (int tries = 0; tries < 100000 && item_info(made).rarity < want; tries++) made = item_new(ia.base, rnd());
+    // Sorteia até sair no mínimo a raridade pedida (lendário é 1 em 100).
+    item_t made = item_in_rarity(ia.base, want, RARITY_LEGENDARY, rnd());
 
     uint8_t ea = equipped_slot(pr, a), eb = equipped_slot(pr, b);
     if (eb) pr->equipped[eb - 1] = ea ? 0 : a + 1; // estava equipado: o novo fica no lugar
