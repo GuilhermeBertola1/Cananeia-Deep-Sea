@@ -23,6 +23,7 @@ COLOR_BAG :: rl.Color{214, 160, 96, 255}
 COLOR_MERMAID :: rl.Color{255, 159, 243, 255}
 COLOR_VILLAGE :: rl.Color{150, 230, 140, 255}
 COLOR_ARMORY :: rl.Color{255, 130, 90, 255}
+COLOR_PEDDLER :: rl.Color{120, 220, 255, 255}
 COLOR_SHARK :: rl.Color{190, 200, 214, 255}
 COLOR_GHOST :: rl.Color{150, 255, 190, 255}
 COLOR_MEGALODON :: rl.Color{140, 170, 200, 255}
@@ -245,6 +246,8 @@ draw_schools :: proc(v: View) {
 		case MARK_VILLAGE:
 			glyph(sx, sy, 'V', COLOR_VILLAGE)
 			draw_label(v, m.x, m.y - 1, "Vila", COLOR_VILLAGE)
+			// O mascate fica do lado do cais da vila.
+			if kx, ky, ok := in_view(v, m.x + 1, m.y); ok do glyph(kx, ky, 'K', COLOR_PEDDLER)
 		case MARK_ARMORY:
 			glyph(sx, sy, 'A', COLOR_ARMORY)
 			draw_label(v, m.x, m.y - 1, "Armeiro", COLOR_ARMORY)
