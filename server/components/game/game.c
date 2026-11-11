@@ -56,6 +56,13 @@
 #define CATALOG_TIME (30 * 60 * TICK_HZ)
 #define PEDDLER_PRICE 4000000         // $40.000 por um épico
 #define PEDDLER_ENCHANT_PRICE 1500000 // mais $15.000 por nível de encanto
+// Encomenda do mascate: uns $300 em peixe (pelo preço cheio), de 5 a 50
+// peixes. Paga o dobro do preço do mercado na hora da entrega, mais um baú.
+#define QUEST_VALUE 30000
+#define QUEST_MIN 5
+#define QUEST_MAX 50
+#define QUEST_PAY_PCT 200
+#define QUEST_FRESH_PCT 80 // só pede espécie que está a 80% ou mais do preço cheio
 
 // Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
 // nem nas zonas seguras, então a costa é um refúgio.
@@ -276,6 +283,11 @@ typedef struct {
     // Catálogo do mascate. Vendido: base = ITEM_NONE até a próxima troca.
     item_t offer[PEDDLER_ITEMS];
     uint8_t offer_enchant[PEDDLER_ITEMS];
+    // Encomenda: quantos peixes de que espécie. Cada perfil entrega uma vez
+    // por catálogo (um bit por perfil, zerado na troca).
+    uint8_t quest_species;
+    uint8_t quest_count;
+    uint8_t quest_done[MAX_PROFILES / 8];
 } village_t;
 
 static struct {
@@ -1120,6 +1132,30 @@ static void buy_peddler(int slot, int village, uint8_t offer) {
     send_rank(-1);
 }
 
+// Encomenda: entrega os peixes pedidos. O preço é o do mercado agora, então
+// se a turma vendeu muito dessa espécie, a encomenda paga menos. A entrega
+// também pesa no mercado, como uma venda.
+static void deliver(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    int vi = at_village(p);
+    if (vi < 0) return;
+    village_t *v = &g.villages[vi];
+    uint8_t sp = v->quest_species, bit = (uint8_t)(1 << (p->profile % 8));
+    if (v->quest_done[p->profile / 8] & bit) { send_event(slot, EV_QUEST_WAIT, sp, 0, 0); return; }
+    if (pr->hold[sp] < v->quest_count) { send_event(slot, EV_QUEST_MISSING, sp, v->quest_count, pr->hold[sp]); return; }
+    uint32_t pay = price_cents(sp) * v->quest_count * QUEST_PAY_PCT / 100;
+    pr->hold[sp] -= v->quest_count;
+    g.pressure[sp] += (uint32_t)v->quest_count * 1000;
+    pr->money += pay;
+    v->quest_done[p->profile / 8] |= bit;
+    storage_save(p->profile, pr);
+    send_event(slot, EV_QUEST_DONE, sp, v->quest_count, pay);
+    give_random_item(slot); // o baú (se a bolsa estiver cheia, avisa)
+    send_prices(-1);
+    send_rank(-1);
+}
+
 static void buy(int slot, uint8_t shop, uint8_t offer) {
     if (shop == SHOP_ARMORY) buy_armory(slot, offer);
     else if (shop >= SHOP_VILLAGE) buy_peddler(slot, shop - SHOP_VILLAGE, offer);
@@ -1524,6 +1560,15 @@ static void new_catalog(void) {
             v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
             v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
         }
+        // Encomenda: uma espécie que não está saturada no mercado.
+        uint8_t fresh[FISH_COUNT], n = 0;
+        for (int sp = 0; sp < FISH_COUNT; sp++)
+            if (price_cents(sp) * 100 >= SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
+        uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
+        int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
+        v->quest_species = sp;
+        v->quest_count = (uint8_t)(count < QUEST_MIN ? QUEST_MIN : count > QUEST_MAX ? QUEST_MAX : count);
+        memset(v->quest_done, 0, sizeof v->quest_done);
     }
     g.catalog_ends = g.tick + CATALOG_TIME;
 }
@@ -2305,6 +2350,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_BUY:
         if (len >= 3) buy(slot, data[1], data[2]);
+        break;
+    case C_DELIVER:
+        deliver(slot);
         break;
     }
 }

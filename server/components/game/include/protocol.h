@@ -25,6 +25,7 @@ enum {
     C_MERMAID = 0x0A, // u8 ação (MERMAID_*)
     C_COMBINE = 0x0B, // u8 índice a, u8 índice b
     C_BUY = 0x0C,     // u8 loja (SHOP_*), u8 oferta
+    C_DELIVER = 0x0D, // entrega a encomenda do mascate da vila onde está
 };
 
 // Servidor -> cliente
@@ -54,7 +55,7 @@ enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_W
        EV_WORLD_START = 36, EV_WORLD_END = 37,
        EV_BOSS_START = 38, EV_BOSS_HIT = 39, EV_BOSS_END = 40, EV_BOSS_REWARD = 41,
        EV_WEATHER = 42, EV_BOUGHT = 43,
-       EV_SOLD_OUT = 44, EV_CATALOG = 45 };
+       EV_SOLD_OUT = 44, EV_CATALOG = 45, EV_QUEST_DONE = 46, EV_QUEST_WAIT = 47, EV_QUEST_MISSING = 48 };
 // Lojas do C_BUY: o armeiro, e (a partir do passo 4) o mascate de cada vila.
 enum { SHOP_ARMORY = 0, SHOP_VILLAGE = 1 };
 // Eventos do mundo (no EV_WORLD_START, `espécie` é o tipo).
