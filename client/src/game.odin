@@ -140,14 +140,13 @@ State :: struct {
 
 	// mundo
 	seed:          u32,
-	tiles:         [MAP_W * MAP_H]Tile,
-	map_ready:     bool, // já tem semente; as regiões são geradas aos poucos
+	map_ready:     bool, // já tem semente; os tiles vêm do cache de chunks (chunks.odin)
 	map_mismatch:  bool,
-	region_ready:  [REGIONS_W * REGIONS_H]bool, // região já gerada (e no minimapa)
+	region_checked: [REGIONS_W * REGIONS_H]bool, // região já conferida com o servidor
 	region_sum:    [REGIONS_W * REGIONS_H]u32, // checksum de cada região, vem no S_WELCOME
 	have_sums:     bool,
-	minimap:       rl.Texture2D,
-	minimap_dirty: bool, // alguma região nova: refazer a textura do minimapa
+	minimap:       Map_View, // janela em volta do barco, no painel
+	bigmap:        Map_View, // janela maior, com menos detalhe (tecla M)
 
 	// eu
 	my_id:         u8,
@@ -279,6 +278,7 @@ update :: proc() {
 	}
 	rl.EndDrawing()
 	free_all(context.temp_allocator)
+	chunks_next_frame()
 }
 
 shutdown :: proc() {
@@ -355,11 +355,7 @@ close_npcs :: proc() {
 
 @(private = "file")
 update_playing :: proc() {
-	load_regions_near(s.x, s.y)
-	if s.minimap_dirty {
-		minimap_build()
-		s.minimap_dirty = false
-	}
+	check_regions_near(s.x, s.y)
 	if rl.IsKeyPressed(.I) {
 		s.inv_open = !s.inv_open
 		close_npcs()
@@ -574,45 +570,44 @@ offline_move :: proc(dx, dy: i8) {
 	s.at_dock = abs(s.x - DOCK_X) <= 1 && abs(s.y - DOCK_Y) <= 1
 }
 
-tile_at :: proc(x, y: i32) -> Tile {
-	if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do return .Mountain
-	ensure_region(world_region_of(x), world_region_of(y))
-	return s.tiles[y * MAP_W + x]
-}
+tile_at :: proc(x, y: i32) -> Tile {return chunks_tile(x, y)}
 
-// --- regiões do mapa ------------------------------------------------------------
-// O cliente não gera o mapa inteiro na entrada: cada região é gerada na
-// primeira vez que alguém olha para ela (tile_at) e fica guardada em s.tiles.
+// --- conferência do mapa ------------------------------------------------------------
+// O cliente gera o mapa sozinho (chunks.odin). Para saber se ficou igual ao do
+// servidor, cada região perto do barco é conferida uma vez com o checksum que
+// veio no S_WELCOME.
 
+@(private = "file")
 region_index :: proc(rx, ry: i32) -> int {return int(ry * REGIONS_W + rx)}
 
+// FNV-1a da região, igual ao region_checksum() do servidor.
 @(private = "file")
-ensure_region :: proc(rx, ry: i32) {
-	if rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H do return
-	i := region_index(rx, ry)
-	if s.region_ready[i] do return
-	world_generate_region(&s.tiles, rx, ry, s.seed)
-	s.region_ready[i] = true
-	s.minimap_dirty = true
-	check_region(rx, ry)
-}
-
-// Confere a região com o checksum que o servidor mandou.
-@(private = "file")
-check_region :: proc(rx, ry: i32) {
-	if !s.have_sums || s.map_mismatch do return
-	if world_region_checksum(&s.tiles, rx, ry) != s.region_sum[region_index(rx, ry)] {
-		s.map_mismatch = true
-		add_log("ATENÇÃO: mapa diferente do servidor!")
+region_checksum :: proc(rx, ry: i32) -> u32 {
+	x0, y0, x1, y1 := world_region_rect(rx, ry)
+	h: u32 = 2166136261
+	for y in y0 ..< y1 {
+		for x in x0 ..< x1 do h = (h ~ u32(tile_at(x, y))) * 16777619
 	}
+	return h
 }
 
-// Deixa pronta a região do barco e as 8 em volta, para não travar na divisa.
+// Confere a região do barco e as 8 em volta (cada uma só uma vez).
 @(private = "file")
-load_regions_near :: proc(x, y: i32) {
-	rx, ry := world_region_of(x), world_region_of(y)
-	for dy in i32(-1) ..= 1 {
-		for dx in i32(-1) ..= 1 do ensure_region(rx + dx, ry + dy)
+check_regions_near :: proc(x, y: i32) {
+	if !s.have_sums || s.map_mismatch do return
+	rx0, ry0 := world_region_of(x), world_region_of(y)
+	for ry in ry0 - 1 ..= ry0 + 1 {
+		for rx in rx0 - 1 ..= rx0 + 1 {
+			if rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H do continue
+			i := region_index(rx, ry)
+			if s.region_checked[i] do continue
+			s.region_checked[i] = true
+			if region_checksum(rx, ry) != s.region_sum[i] {
+				s.map_mismatch = true
+				add_log("ATENÇÃO: mapa diferente do servidor!")
+				return
+			}
+		}
 	}
 }
 
@@ -710,10 +705,11 @@ on_net_close :: proc() {
 @(private = "file")
 welcome :: proc(seed: u32) {
 	if !s.map_ready || seed != s.seed {
-		// Semente nova: esquece as regiões geradas (mesma semente: reaproveita).
+		// Semente nova: esquece os chunks e os mapas desenhados (mesma semente: reaproveita).
 		s.seed = seed
-		s.region_ready = {}
-		s.minimap_dirty = true
+		chunks_reset(seed)
+		s.minimap.built = false
+		s.bigmap.built = false
 		s.map_ready = true
 	}
 	s.screen = .Playing
@@ -735,12 +731,7 @@ on_net_message :: proc(data: []u8) {
 		welcome(seed)
 		s.have_sums = true
 		s.map_mismatch = false
-		// Regiões que já estavam prontas (reconexão) são conferidas agora.
-		for ry in i32(0) ..< REGIONS_H {
-			for rx in i32(0) ..< REGIONS_W {
-				if s.region_ready[region_index(rx, ry)] do check_region(rx, ry)
-			}
-		}
+		s.region_checked = {} // checksums novos: confere tudo de novo
 
 	case S_ERROR:
 		switch read_u8(&r) {

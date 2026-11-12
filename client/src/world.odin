@@ -235,37 +235,5 @@ world_region_rect :: proc(rx, ry: i32) -> (x0, y0, x1, y1: i32) {
 	return max(x0, 0), max(y0, 0), min(x0 + REGION_CELLS, MAP_W), min(y0 + REGION_CELLS, MAP_H)
 }
 
-world_generate_region :: proc(tiles: ^[MAP_W * MAP_H]Tile, rx, ry: i32, seed: u32) {
-	x0, y0, x1, y1 := world_region_rect(rx, ry)
-	for y in y0 ..< y1 {
-		for x in x0 ..< x1 {
-			tiles[y * MAP_W + x] = world_tile_at(x, y, seed)
-		}
-	}
-}
-
-// FNV-1a da região, igual ao world_region_checksum do servidor.
-world_region_checksum :: proc(tiles: ^[MAP_W * MAP_H]Tile, rx, ry: i32) -> u32 {
-	x0, y0, x1, y1 := world_region_rect(rx, ry)
-	h: u32 = 2166136261
-	for y in y0 ..< y1 {
-		for x in x0 ..< x1 do h = (h ~ u32(tiles[y * MAP_W + x])) * 16777619
-	}
-	return h
-}
-
-world_generate :: proc(tiles: ^[MAP_W * MAP_H]Tile, seed: u32) {
-	for ry in i32(0) ..< REGIONS_H {
-		for rx in i32(0) ..< REGIONS_W do world_generate_region(tiles, rx, ry, seed)
-	}
-}
-
-// FNV-1a, igual ao world_checksum do servidor.
-world_checksum :: proc(tiles: ^[MAP_W * MAP_H]Tile) -> u32 {
-	h: u32 = 2166136261
-	for t in tiles do h = (h ~ u32(t)) * 16777619
-	return h
-}
-
 tile_is_water :: proc(t: Tile) -> bool {return t <= .Shallow}
 tile_is_sailable :: proc(t: Tile) -> bool {return t <= .Shallow || t == .Dock}

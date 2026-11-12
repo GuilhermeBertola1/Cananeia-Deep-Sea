@@ -8,7 +8,9 @@ import "core:math"
 import "core:strings"
 import rl "vendor:raylib"
 
-MINIMAP_SIZE :: 256 // metade do mapa: cada pixel = 2x2 células
+MINIMAP_SIZE :: 256 // tamanho do minimapa na tela, em pixels
+MINIMAP_CELLS :: 512 // o minimapa mostra 512x512 células em volta do barco (1 pixel = 2x2)
+BIGMAP_CELLS :: 2048 // o mapa grande mostra 2048x2048 células (1 pixel = 4x4)
 
 cstr :: proc(str: string) -> cstring {
 	return strings.clone_to_cstring(str, context.temp_allocator)
@@ -25,33 +27,76 @@ minimap_color :: proc(t: Tile) -> rl.Color {
 	return TILE_STYLE[t].fg
 }
 
-// Desenha numa textura as regiões que já foram geradas; as outras ficam
-// escuras até o barco chegar perto. Roda de novo a cada região nova.
-minimap_build :: proc() {
-	pixels := make([]rl.Color, MAP_W * MAP_H, context.temp_allocator)
-	for t, i in s.tiles {
-		x, y := i32(i % MAP_W), i32(i / MAP_W)
-		seen := s.region_ready[region_index(world_region_of(x), world_region_of(y))]
-		pixels[i] = minimap_color(t) if seen else rl.Color{4, 10, 22, 255}
-	}
-	if s.minimap.id != 0 {
-		rl.UpdateTexture(s.minimap, raw_data(pixels)) // mesmo tamanho: só troca os pixels
-		return
-	}
-	img := rl.Image {
-		data    = raw_data(pixels),
-		width   = MAP_W,
-		height  = MAP_H,
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_R8G8B8A8,
-	}
-	s.minimap = rl.LoadTextureFromImage(img)
+// Um pedaço do mapa desenhado numa textura, 1 pixel a cada `step` células.
+// A tela mostra `cells` x `cells` células centradas no barco, mas a textura
+// cobre um pouco mais (`margin` de cada lado, com o canto em ox, oy): assim o
+// mapa desliza junto com o barco e só é redesenhado quando ele chega perto da
+// beirada da textura.
+Map_View :: struct {
+	tex:         rl.Texture2D,
+	ox, oy:      i32, // canto da textura no mundo
+	cells, step: i32, // células visíveis e células por pixel
+	tex_cells:   i32, // células que a textura cobre (cells + 2 * margin)
+	built:       bool,
 }
 
 @(private = "file")
-draw_map_at :: proc(x, y, size: f32) {
-	rl.DrawTexturePro(s.minimap, {0, 0, MAP_W, MAP_H}, {x, y, size, size}, {}, 0, rl.WHITE)
-	k := size / MAP_W
+map_view_follow :: proc(v: ^Map_View, cells, step: i32) {
+	margin := cells / 8 // 64 células no minimapa
+	tex_cells := cells + 2 * margin
+	// O centro da textura anda de margin em margin; o barco nunca fica a mais
+	// de margin / 2 dele, então a parte visível cabe sempre dentro da textura.
+	ox := (s.x + margin / 2) / margin * margin - tex_cells / 2
+	oy := (s.y + margin / 2) / margin * margin - tex_cells / 2
+	if v.built && v.ox == ox && v.oy == oy && v.tex_cells == tex_cells do return
+	v.ox, v.oy, v.cells, v.step, v.tex_cells = ox, oy, cells, step, tex_cells
+	map_view_build(v)
+}
+
+// Gera os pixels direto com world_tile_at (sem passar pelo cache de chunks,
+// para não expulsar do cache os chunks da tela) e manda para a textura.
+@(private = "file")
+map_view_build :: proc(v: ^Map_View) {
+	side := v.tex_cells / v.step
+	pixels := make([]rl.Color, int(side * side), context.temp_allocator)
+	for py in 0 ..< side {
+		for px in 0 ..< side {
+			x, y := v.ox + px * v.step, v.oy + py * v.step
+			color := rl.Color{0, 0, 0, 255} // fora do mapa
+			if x >= 0 && y >= 0 && x < MAP_W && y < MAP_H do color = minimap_color(world_tile_at(x, y, s.seed))
+			pixels[py * side + px] = color
+		}
+	}
+	if v.built {
+		rl.UpdateTexture(v.tex, raw_data(pixels)) // mesmo tamanho: só troca os pixels
+		return
+	}
+	if v.tex.id != 0 do rl.UnloadTexture(v.tex) // semente nova
+	img := rl.Image {
+		data    = raw_data(pixels),
+		width   = side,
+		height  = side,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_R8G8B8A8,
+	}
+	v.tex = rl.LoadTextureFromImage(img)
+	v.built = true
+}
+
+// Desenha a janela v na tela em (sx, sy) com size x size pixels, mais os
+// pontos (marcas, barcos, bichos). O scissor corta o que cai fora da janela.
+@(private = "file")
+draw_map_at :: proc(v: ^Map_View, sx, sy, size: f32) {
+	// Canto da parte visível no mundo: o barco fica sempre no meio.
+	wx, wy := s.x - v.cells / 2, s.y - v.cells / 2
+	step := f32(v.step)
+	src := rl.Rectangle{f32(wx - v.ox) / step, f32(wy - v.oy) / step, f32(v.cells) / step, f32(v.cells) / step}
+	rl.DrawTexturePro(v.tex, src, {sx, sy, size, size}, {}, 0, rl.WHITE)
+	rl.BeginScissorMode(i32(sx), i32(sy), i32(size), i32(size))
+	defer rl.EndScissorMode()
+	k := size / f32(v.cells)
+	// (x, y) daqui para baixo é onde a célula (0, 0) do mundo cairia na tela.
+	x, y := sx - f32(wx) * k, sy - f32(wy) * k
 	dot :: proc(x, y, k: f32, cx, cy: i32, r: f32, color: rl.Color) {
 		rl.DrawRectangleV({x + f32(cx) * k - r, y + f32(cy) * k - r}, {r * 2, r * 2}, color)
 	}
@@ -225,7 +270,8 @@ draw_hud :: proc() {
 		y += 14
 	}
 
-	draw_map_at(px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
+	map_view_follow(&s.minimap, MINIMAP_CELLS, 2)
+	draw_map_at(&s.minimap, px + (PANEL_W - MINIMAP_SIZE) / 2, y, MINIMAP_SIZE)
 	y += MINIMAP_SIZE + 6
 	if target, ok := nearest_target(); ok {
 		text(target, x, y, 10, COLOR_ACCENT)
@@ -776,9 +822,11 @@ draw_inventory :: proc() {
 draw_big_map :: proc() {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	rl.DrawRectangleV({0, 0}, {sw, sh}, {0, 0, 0, 160})
-	size := math.floor(min(sw, sh) * 0.86 / MAP_W * 4) / 4 * MAP_W // múltiplo de 1/4 para os pixels ficarem iguais
+	map_view_follow(&s.bigmap, BIGMAP_CELLS, 4)
+	side := f32(BIGMAP_CELLS / 4)
+	size := math.floor(min(sw, sh) * 0.86 / side * 4) / 4 * side // múltiplo de 1/4 para os pixels ficarem iguais
 	x, y := (sw - size) / 2, (sh - size) / 2
-	draw_map_at(x, y, size)
+	draw_map_at(&s.bigmap, x, y, size)
 	rl.DrawRectangleLinesEx({x - 2, y - 2, size + 4, size + 4}, 2, COLOR_ACCENT)
 	text("Mapa do oceano  -  M ou Esc fecha", x, y - 26, 20, COLOR_ACCENT)
 }
