@@ -237,14 +237,9 @@ void app_main(void) {
     for (int i = 0; i < MAX_PLAYERS; i++) slot_fd[i] = -1;
     game_lock = xSemaphoreCreateMutex();
 
-    // O mapa inteiro (256 KB) fica na PSRAM.
-    uint8_t *tiles = heap_caps_malloc(MAP_W * MAP_H, MALLOC_CAP_SPIRAM);
-    if (!tiles) tiles = malloc(MAP_W * MAP_H);
-    if (!tiles) {
-        ESP_LOGE(TAG, "sem memória para o mapa: a PSRAM está ligada?");
-        return;
-    }
-    game_init(tiles, CONFIG_CANANEIA_MAP_SEED, esp_random(), ws_send);
+    // Desde a v1.2 o mapa é gerado em chunks (4 KB cada) com malloc, e o
+    // firmware do ESP32 não é mais garantido: a última versão testada nele é a v1.1.
+    game_init(CONFIG_CANANEIA_MAP_SEED, esp_random(), ws_send);
     ESP_LOGI(TAG, "mapa gerado (semente %d)", CONFIG_CANANEIA_MAP_SEED);
 
     wifi_start();

@@ -1,5 +1,6 @@
 #include "game.h"
 #include "world.h"
+#include "chunks.h"
 #include "fish.h"
 #include "protocol.h"
 #include "storage.h"
@@ -291,7 +292,6 @@ typedef struct {
 } village_t;
 
 static struct {
-    uint8_t *tiles;
     uint32_t seed, tick, rng;
     uint32_t region_sum[REGIONS_W * REGIONS_H]; // checksum de cada região, para o cliente conferir
     game_send_fn send;
@@ -331,9 +331,17 @@ static uint32_t rnd(void) {
 static uint32_t rnd_below(uint32_t n) { return rnd() % n; }
 static int chance_permille(uint32_t pm) { return rnd_below(1000) < pm; }
 
-static tile_t tile(int32_t x, int32_t y) {
-    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
-    return (tile_t)g.tiles[y * MAP_W + x];
+static tile_t tile(int32_t x, int32_t y) { return chunks_tile(x, y); }
+
+// Checksum FNV-1a da região, igual ao world_region_checksum() do cliente,
+// mas lendo dos chunks (gera os que ainda não existem).
+static uint32_t region_checksum(int32_t rx, int32_t ry) {
+    int32_t x0, y0, x1, y1;
+    world_region_rect(rx, ry, &x0, &y0, &x1, &y1);
+    uint32_t h = 2166136261u;
+    for (int32_t y = y0; y < y1; y++)
+        for (int32_t x = x0; x < x1; x++) h = (h ^ (uint8_t)tile(x, y)) * 16777619u;
+    return h;
 }
 
 // Estoque da região onde fica a célula (x, y).
@@ -2310,15 +2318,14 @@ static void place_armory(void) {
 
 // --- API --------------------------------------------------------------------
 
-void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn send) {
+void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     memset(&g, 0, sizeof g);
-    g.tiles = tiles;
     g.seed = seed;
     g.rng = random_seed ? random_seed : 0x9E3779B9u;
     g.send = send;
-    world_generate(tiles, seed);
+    chunks_init(seed);
     for (int ry = 0; ry < REGIONS_H; ry++)
-        for (int rx = 0; rx < REGIONS_W; rx++) g.region_sum[ry * REGIONS_W + rx] = world_region_checksum(tiles, rx, ry);
+        for (int rx = 0; rx < REGIONS_W; rx++) g.region_sum[ry * REGIONS_W + rx] = region_checksum(rx, ry);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
     place_mermaid();
     place_villages();
@@ -2409,6 +2416,8 @@ void game_save_all(void) {
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) storage_save(g.players[i].profile, prof(&g.players[i]));
 }
+
+size_t game_chunks(void) { return chunks_count(); }
 
 int game_online(void) {
     int n = 0;

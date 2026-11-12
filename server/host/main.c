@@ -170,10 +170,10 @@ static void serve_status(sock_t fd) {
     char body[256];
     int n = snprintf(body, sizeof body,
                      "{\"version\":\"pc\",\"uptime_s\":%llu,\"players\":%d,\"joins\":%u"
-                     ",\"tick_avg_us\":%llu,\"tick_max_us\":%llu,\"late_ticks\":%u}",
+                     ",\"tick_avg_us\":%llu,\"tick_max_us\":%llu,\"late_ticks\":%u,\"chunks\":%zu}",
                      (unsigned long long)((now_ms() - stats.started_ms) / 1000), game_online(), stats.joins,
                      (unsigned long long)(stats.ticks ? stats.tick_sum_us / stats.ticks : 0),
-                     (unsigned long long)stats.tick_max_us, stats.late_ticks);
+                     (unsigned long long)stats.tick_max_us, stats.late_ticks, game_chunks());
     http_reply(fd, "200 OK", "application/json", body, (size_t)n);
 }
 
@@ -298,8 +298,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < MAX_CLIENTS; i++) clients[i].fd = BAD_SOCK;
     for (int i = 0; i < MAX_PLAYERS; i++) slot_client[i] = -1;
 
-    uint8_t *tiles = malloc(MAP_W * MAP_H);
-    game_init(tiles, 1337, (uint32_t)time(NULL), game_send);
+    game_init(1337, (uint32_t)time(NULL), game_send);
 
     sock_t srv = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;
