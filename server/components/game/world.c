@@ -58,13 +58,24 @@ static const biome_params_t BIOME_PARAMS[BIOME_COUNT] = {
 };
 
 // Quais biomas podem sair em cada anel em volta do porto (anel 0 = a região
-// do porto, anel 1 = as 8 vizinhas...). O último vale para os anéis de fora.
-#define RINGS 4
-static const uint8_t RING_BIOMES[RINGS][4] = {
+// do porto, anel 1 = as 8 vizinhas...). Os 4 primeiros anéis são a costa.
+#define NEAR_RINGS 4
+static const uint8_t RING_BIOMES[NEAR_RINGS][4] = {
     {BIOME_BAY, BIOME_BAY, BIOME_BAY, BIOME_BAY},
     {BIOME_BAY, BIOME_MANGROVE, BIOME_ISLANDS, BIOME_ISLANDS},
     {BIOME_MANGROVE, BIOME_ISLANDS, BIOME_OPEN, BIOME_REEF},
     {BIOME_OPEN, BIOME_REEF, BIOME_ABYSS, BIOME_ABYSS},
+};
+
+// Depois da costa vem o mar distante, que vai até a borda do mundo: ainda
+// aparecem arquipélagos e mangues para descobrir. A partir do anel FAR_RING
+// (umas 2000 células do porto) o abismo toma conta da maior parte.
+#define FAR_RING 16
+static const uint8_t OUTER_BIOMES[8] = {
+    BIOME_OPEN, BIOME_OPEN, BIOME_REEF, BIOME_ISLANDS, BIOME_ISLANDS, BIOME_MANGROVE, BIOME_ABYSS, BIOME_ABYSS,
+};
+static const uint8_t FAR_BIOMES[8] = {
+    BIOME_OPEN, BIOME_REEF, BIOME_ISLANDS, BIOME_ABYSS, BIOME_ABYSS, BIOME_ABYSS, BIOME_ABYSS, BIOME_ABYSS,
 };
 
 static int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
@@ -73,9 +84,10 @@ int32_t world_region_of(int32_t v) { return (v + REGION_CELLS / 2) / REGION_CELL
 
 biome_t world_region_biome(int32_t rx, int32_t ry, uint32_t seed) {
     int32_t ring = iabs(rx - PORT_RX) > iabs(ry - PORT_RY) ? iabs(rx - PORT_RX) : iabs(ry - PORT_RY);
-    if (ring >= RINGS) ring = RINGS - 1;
     uint32_t h = world_hash(rx, ry, seed ^ 0xB10E);
-    return (biome_t)RING_BIOMES[ring][h % 4];
+    if (ring < NEAR_RINGS) return (biome_t)RING_BIOMES[ring][h % 4];
+    if (ring < FAR_RING) return (biome_t)OUTER_BIOMES[h % 8];
+    return (biome_t)FAR_BIOMES[h % 8];
 }
 
 // Anda a fração t (0..ONE) do caminho de a até b.
@@ -165,12 +177,15 @@ tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
     if (x == DOCK_X && y == DOCK_Y) return TILE_DOCK;
 
+    // Ilha-porto e águas calmas em volta dela. Olha o quadrado antes de
+    // calcular dx² + dy²: longe do porto a conta passaria de 32 bits.
     int32_t dx = x - PORT_X, dy = y - PORT_Y;
-    int32_t d2 = dx * dx + dy * dy;
-    // Ilha-porto e águas calmas em volta dela.
-    if (d2 <= PORT_RADIUS * PORT_RADIUS) return d2 > 30 ? TILE_SAND : d2 < 4 ? TILE_FOREST : TILE_GRASS;
-    if (d2 <= 10 * 10) return TILE_SHALLOW;
-    if (d2 <= 21 * 21) return TILE_WATER;
+    if (iabs(dx) <= 21 && iabs(dy) <= 21) {
+        int32_t d2 = dx * dx + dy * dy;
+        if (d2 <= PORT_RADIUS * PORT_RADIUS) return d2 > 30 ? TILE_SAND : d2 < 4 ? TILE_FOREST : TILE_GRASS;
+        if (d2 <= 10 * 10) return TILE_SHALLOW;
+        if (d2 <= 21 * 21) return TILE_WATER;
+    }
 
     // O bioma da região decide a média e a força do ruído.
     biome_params_t bp = blended_params(x, y, seed);
@@ -197,30 +212,11 @@ void world_region_rect(int32_t rx, int32_t ry, int32_t *x0, int32_t *y0, int32_t
     if (*y1 > MAP_H) *y1 = MAP_H;
 }
 
-void world_generate_region(uint8_t *tiles, int32_t rx, int32_t ry, uint32_t seed) {
-    int32_t x0, y0, x1, y1;
-    world_region_rect(rx, ry, &x0, &y0, &x1, &y1);
-    for (int32_t y = y0; y < y1; y++)
-        for (int32_t x = x0; x < x1; x++)
-            tiles[y * MAP_W + x] = (uint8_t)world_tile_at(x, y, seed);
-}
-
-uint32_t world_region_checksum(const uint8_t *tiles, int32_t rx, int32_t ry) {
+uint32_t world_region_checksum(int32_t rx, int32_t ry, uint32_t seed) {
     int32_t x0, y0, x1, y1;
     world_region_rect(rx, ry, &x0, &y0, &x1, &y1);
     uint32_t h = 2166136261u;
     for (int32_t y = y0; y < y1; y++)
-        for (int32_t x = x0; x < x1; x++) h = (h ^ tiles[y * MAP_W + x]) * 16777619u;
-    return h;
-}
-
-void world_generate(uint8_t *tiles, uint32_t seed) {
-    for (int32_t ry = 0; ry < REGIONS_H; ry++)
-        for (int32_t rx = 0; rx < REGIONS_W; rx++) world_generate_region(tiles, rx, ry, seed);
-}
-
-uint32_t world_checksum(const uint8_t *tiles) {
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < MAP_W * MAP_H; i++) h = (h ^ tiles[i]) * 16777619u;
+        for (int32_t x = x0; x < x1; x++) h = (h ^ (uint8_t)world_tile_at(x, y, seed)) * 16777619u;
     return h;
 }

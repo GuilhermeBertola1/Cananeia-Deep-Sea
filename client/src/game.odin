@@ -142,9 +142,6 @@ State :: struct {
 	seed:          u32,
 	map_ready:     bool, // já tem semente; os tiles vêm do cache de chunks (chunks.odin)
 	map_mismatch:  bool,
-	region_checked: [REGIONS_W * REGIONS_H]bool, // região já conferida com o servidor
-	region_sum:    [REGIONS_W * REGIONS_H]u32, // checksum de cada região, vem no S_WELCOME
-	have_sums:     bool,
 	minimap:       Map_View, // janela em volta do barco, no painel
 	bigmap:        Map_View, // janela maior, com menos detalhe (tecla M)
 
@@ -355,7 +352,6 @@ close_npcs :: proc() {
 
 @(private = "file")
 update_playing :: proc() {
-	check_regions_near(s.x, s.y)
 	if rl.IsKeyPressed(.I) {
 		s.inv_open = !s.inv_open
 		close_npcs()
@@ -574,41 +570,20 @@ tile_at :: proc(x, y: i32) -> Tile {return chunks_tile(x, y)}
 
 // --- conferência do mapa ------------------------------------------------------------
 // O cliente gera o mapa sozinho (chunks.odin). Para saber se ficou igual ao do
-// servidor, cada região perto do barco é conferida uma vez com o checksum que
-// veio no S_WELCOME.
+// servidor, o S_WELCOME traz o checksum de algumas regiões de teste (perto do
+// porto, no mar distante e no abismo), e o cliente gera e confere cada uma ao entrar.
 
 @(private = "file")
-region_index :: proc(rx, ry: i32) -> int {return int(ry * REGIONS_W + rx)}
-
-// FNV-1a da região, igual ao region_checksum() do servidor.
-@(private = "file")
-region_checksum :: proc(rx, ry: i32) -> u32 {
-	x0, y0, x1, y1 := world_region_rect(rx, ry)
-	h: u32 = 2166136261
-	for y in y0 ..< y1 {
-		for x in x0 ..< x1 do h = (h ~ u32(tile_at(x, y))) * 16777619
+check_probes :: proc(r: ^Reader, seed: u32) {
+	s.map_mismatch = false
+	n := int(read_u8(r))
+	for _ in 0 ..< n {
+		rx, ry := i32(read_u16(r)), i32(read_u16(r))
+		sum := read_u32(r)
+		if !r.ok do return
+		if world_region_checksum(rx, ry, seed) != sum do s.map_mismatch = true
 	}
-	return h
-}
-
-// Confere a região do barco e as 8 em volta (cada uma só uma vez).
-@(private = "file")
-check_regions_near :: proc(x, y: i32) {
-	if !s.have_sums || s.map_mismatch do return
-	rx0, ry0 := world_region_of(x), world_region_of(y)
-	for ry in ry0 - 1 ..= ry0 + 1 {
-		for rx in rx0 - 1 ..= rx0 + 1 {
-			if rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H do continue
-			i := region_index(rx, ry)
-			if s.region_checked[i] do continue
-			s.region_checked[i] = true
-			if region_checksum(rx, ry) != s.region_sum[i] {
-				s.map_mismatch = true
-				add_log("ATENÇÃO: mapa diferente do servidor!")
-				return
-			}
-		}
-	}
+	if s.map_mismatch do add_log("ATENÇÃO: mapa diferente do servidor!")
 }
 
 @(private = "file")
@@ -721,17 +696,12 @@ on_net_message :: proc(data: []u8) {
 	case S_WELCOME:
 		s.my_id = read_u8(&r)
 		seed := read_u32(&r)
-		_ = read_u16(&r) // largura e altura: fixas por enquanto (MAP_W e MAP_H)
-		_ = read_u16(&r)
+		_ = read_u32(&r) // largura e altura: fixas (MAP_W e MAP_H)
+		_ = read_u32(&r)
 		_ = read_u8(&r) // ticks por segundo
-		rw, rh := read_u8(&r), read_u8(&r)
-		if !r.ok || int(rw) != REGIONS_W || int(rh) != REGIONS_H do return
-		for i in 0 ..< len(s.region_sum) do s.region_sum[i] = read_u32(&r)
 		if !r.ok do return
 		welcome(seed)
-		s.have_sums = true
-		s.map_mismatch = false
-		s.region_checked = {} // checksums novos: confere tudo de novo
+		check_probes(&r, seed)
 
 	case S_ERROR:
 		switch read_u8(&r) {

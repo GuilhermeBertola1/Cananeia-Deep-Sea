@@ -4,8 +4,9 @@ package game
 // só com inteiros, para o cliente (WASM) e o ESP32 chegarem no mesmo mapa.
 // O servidor manda o checksum no S_WELCOME e o cliente confere.
 
-MAP_W :: 1024
-MAP_H :: 1024
+// 65536 x 65536 células, mas só os chunks perto do barco são gerados.
+MAP_W :: 65536
+MAP_H :: 65536
 
 PORT_X :: MAP_W / 2
 PORT_Y :: MAP_H / 2
@@ -99,6 +100,8 @@ BIOME_PARAMS := [Biome]Biome_Params {
 	.Abyss    = {-12000, 40},
 }
 
+// Biomas por anel em volta do porto, igual ao world.c: a costa (anéis 0 a 3),
+// o mar distante e, do anel FAR_RING em diante, o mar do abismo.
 @(private = "file")
 RING_BIOMES := [4][4]Biome {
 	{.Bay, .Bay, .Bay, .Bay},
@@ -106,14 +109,21 @@ RING_BIOMES := [4][4]Biome {
 	{.Mangrove, .Islands, .Open, .Reef},
 	{.Open, .Reef, .Abyss, .Abyss},
 }
+@(private = "file")
+FAR_RING :: 16
+@(private = "file")
+OUTER_BIOMES := [8]Biome{.Open, .Open, .Reef, .Islands, .Islands, .Mangrove, .Abyss, .Abyss}
+@(private = "file")
+FAR_BIOMES := [8]Biome{.Open, .Reef, .Islands, .Abyss, .Abyss, .Abyss, .Abyss, .Abyss}
 
 world_region_of :: proc(v: i32) -> i32 {return (v + REGION_CELLS / 2) / REGION_CELLS}
 
 world_region_biome :: proc(rx, ry: i32, seed: u32) -> Biome {
 	ring := max(abs(rx - PORT_RX), abs(ry - PORT_RY))
-	ring = min(ring, len(RING_BIOMES) - 1)
 	h := world_hash(rx, ry, seed ~ 0xB10E)
-	return RING_BIOMES[ring][h % 4]
+	if ring < len(RING_BIOMES) do return RING_BIOMES[ring][h % 4]
+	if ring < FAR_RING do return OUTER_BIOMES[h % 8]
+	return FAR_BIOMES[h % 8]
 }
 
 @(private = "file")
@@ -202,16 +212,19 @@ world_tile_at :: proc(x, y: i32, seed: u32) -> Tile {
 	if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do return .Mountain
 	if x == DOCK_X && y == DOCK_Y do return .Dock
 
+	// Ilha-porto e águas calmas em volta dela. Olha o quadrado antes de
+	// calcular dx² + dy²: longe do porto a conta passaria de 32 bits.
 	dx, dy := x - PORT_X, y - PORT_Y
-	d2 := dx * dx + dy * dy
-	// Ilha-porto e águas calmas em volta dela.
-	if d2 <= PORT_RADIUS * PORT_RADIUS {
-		if d2 > 30 do return .Sand
-		if d2 < 4 do return .Forest
-		return .Grass
+	if abs(dx) <= 21 && abs(dy) <= 21 {
+		d2 := dx * dx + dy * dy
+		if d2 <= PORT_RADIUS * PORT_RADIUS {
+			if d2 > 30 do return .Sand
+			if d2 < 4 do return .Forest
+			return .Grass
+		}
+		if d2 <= 10 * 10 do return .Shallow
+		if d2 <= 21 * 21 do return .Water
 	}
-	if d2 <= 10 * 10 do return .Shallow
-	if d2 <= 21 * 21 do return .Water
 
 	// O bioma da região decide a média e a força do ruído.
 	bp := blended_params(x, y, seed)
@@ -233,6 +246,16 @@ world_region_rect :: proc(rx, ry: i32) -> (x0, y0, x1, y1: i32) {
 	x0 = rx * REGION_CELLS - REGION_CELLS / 2
 	y0 = ry * REGION_CELLS - REGION_CELLS / 2
 	return max(x0, 0), max(y0, 0), min(x0 + REGION_CELLS, MAP_W), min(y0 + REGION_CELLS, MAP_H)
+}
+
+// FNV-1a da região, gerada na hora: igual ao world_region_checksum() do servidor.
+world_region_checksum :: proc(rx, ry: i32, seed: u32) -> u32 {
+	x0, y0, x1, y1 := world_region_rect(rx, ry)
+	h: u32 = 2166136261
+	for y in y0 ..< y1 {
+		for x in x0 ..< x1 do h = (h ~ u32(world_tile_at(x, y, seed))) * 16777619
+	}
+	return h
 }
 
 tile_is_water :: proc(t: Tile) -> bool {return t <= .Shallow}

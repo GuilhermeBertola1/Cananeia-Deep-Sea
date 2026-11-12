@@ -133,10 +133,10 @@ draw_map_at :: proc(v: ^Map_View, sx, sy, size: f32) {
 @(private = "file")
 nearest_target :: proc() -> (string, bool) {
 	best := -1
-	best_d2: i32 = max(i32)
+	best_d2: i64 = max(i64)
 	for m, i in s.marks[:s.mark_count] {
 		if m.kind != MARK_SCHOOL do continue // bags e coroas também são marcas
-		dx, dy := m.x - s.x, m.y - s.y
+		dx, dy := i64(m.x - s.x), i64(m.y - s.y) // em 64 bits: longe, dx² + dy² passa de 32
 		if d2 := dx * dx + dy * dy; d2 < best_d2 {best, best_d2 = i, d2}
 	}
 	if best < 0 do return "", false

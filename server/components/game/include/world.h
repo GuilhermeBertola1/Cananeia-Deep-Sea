@@ -4,8 +4,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MAP_W 1024
-#define MAP_H 1024
+// O mundo tem 65536 x 65536 células (cabe no u16 do protocolo), mas ninguém
+// guarda ele inteiro: os dois lados geram só os pedaços perto dos barcos.
+#define MAP_W 65536
+#define MAP_H 65536
+// Muda quando o mapa muda de jeito: o perfil salvo num mapa de outra versão
+// volta para o porto em vez de aparecer num lugar que agora é outro.
+#define MAP_VERSION 1
 
 // Ilha-porto inicial no centro do mapa.
 #define PORT_X (MAP_W / 2)
@@ -48,14 +53,10 @@ uint32_t world_hash(int32_t x, int32_t y, uint32_t seed);
 biome_t world_region_biome(int32_t rx, int32_t ry, uint32_t seed);
 int32_t world_region_of(int32_t v); // região (rx ou ry) de uma coordenada x ou y
 tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed);
-void world_generate(uint8_t *tiles, uint32_t seed); // tiles: MAP_W * MAP_H bytes
-uint32_t world_checksum(const uint8_t *tiles);      // FNV-1a do mapa inteiro
-
-// Uma região por vez: o cliente só gera as regiões perto do barco.
-// O retângulo é [x0, x1) × [y0, y1), já cortado na borda do mapa.
+// Retângulo [x0, x1) × [y0, y1) da região, já cortado na borda do mapa.
 void world_region_rect(int32_t rx, int32_t ry, int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1);
-void world_generate_region(uint8_t *tiles, int32_t rx, int32_t ry, uint32_t seed);
-uint32_t world_region_checksum(const uint8_t *tiles, int32_t rx, int32_t ry); // FNV-1a da região
+// FNV-1a dos tiles da região, gerados na hora (não usa nem guarda chunks).
+uint32_t world_region_checksum(int32_t rx, int32_t ry, uint32_t seed);
 
 static inline bool tile_is_water(tile_t t) { return t <= TILE_SHALLOW; }
 static inline bool tile_is_sailable(tile_t t) { return t <= TILE_SHALLOW || t == TILE_DOCK; }
