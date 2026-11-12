@@ -4,8 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MAP_W 512
-#define MAP_H 512
+#define MAP_W 1024
+#define MAP_H 1024
 
 // Ilha-porto inicial no centro do mapa.
 #define PORT_X (MAP_W / 2)

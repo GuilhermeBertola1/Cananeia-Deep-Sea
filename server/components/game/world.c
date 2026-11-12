@@ -99,6 +99,68 @@ static biome_params_t blended_params(int32_t x, int32_t y, uint32_t seed) {
     return out;
 }
 
+// ---------------------------------------------------------------- canais
+
+// Cada divisa entre duas regiões vizinhas tem um ponto de passagem, sorteado
+// a até 32 células do meio da divisa. Um canal reto liga o centro de cada
+// região aos pontos de passagem dos seus 4 lados, então sempre dá para ir de
+// uma região para a vizinha. Cada canal fica dentro da própria região, e por
+// isso uma célula só precisa olhar os 4 canais da região dela.
+#define CHANNEL_JITTER 32
+#define CHANNEL_WIDTH2 2 // distância² até a linha do canal: 3 células de largura
+
+// Prende v dentro do mapa, longe 2 células da borda (as regiões da borda
+// têm o centro em cima da borda, e o canal não pode sair do mapa).
+static int32_t clamp_in(int32_t v, int32_t size) { return v < 2 ? 2 : v > size - 3 ? size - 3 : v; }
+
+// Ponto de passagem do lado direito (side 0) ou de baixo (side 1) da região.
+static void passage(int32_t rx, int32_t ry, int side, uint32_t seed, int32_t *px, int32_t *py) {
+    uint32_t h = world_hash(rx * 2 + (side == 0), ry * 2 + (side == 1), seed ^ 0xCA7A1);
+    int32_t jitter = (int32_t)(h % (2 * CHANNEL_JITTER + 1)) - CHANNEL_JITTER;
+    if (side == 0) {
+        *px = rx * REGION_CELLS + REGION_CELLS / 2;
+        *py = clamp_in(ry * REGION_CELLS + jitter, MAP_H);
+    } else {
+        *px = clamp_in(rx * REGION_CELLS + jitter, MAP_W);
+        *py = ry * REGION_CELLS + REGION_CELLS / 2;
+    }
+}
+
+// Distância² de (x, y) até o segmento de (ax, ay) a (bx, by).
+static int32_t dist2_segment(int32_t x, int32_t y, int32_t ax, int32_t ay, int32_t bx, int32_t by) {
+    int32_t vx = bx - ax, vy = by - ay;
+    int32_t len2 = vx * vx + vy * vy;
+    int32_t t = (x - ax) * vx + (y - ay) * vy; // projeção, ainda multiplicada por len2
+    if (t < 0) t = 0;
+    if (t > len2) t = len2;
+    int32_t cx = ax + (len2 ? vx * t / len2 : 0), cy = ay + (len2 ? vy * t / len2 : 0);
+    return (x - cx) * (x - cx) + (y - cy) * (y - cy);
+}
+
+static bool on_channel(int32_t x, int32_t y, uint32_t seed) {
+    int32_t rx = world_region_of(x), ry = world_region_of(y);
+    int32_t cx = rx * REGION_CELLS, cy = ry * REGION_CELLS;
+    int32_t px, py;
+    // Direita e baixo são desta região; esquerda e cima são da vizinha.
+    if (rx + 1 < REGIONS_W) {
+        passage(rx, ry, 0, seed, &px, &py);
+        if (dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2) return true;
+    }
+    if (ry + 1 < REGIONS_H) {
+        passage(rx, ry, 1, seed, &px, &py);
+        if (dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2) return true;
+    }
+    if (rx > 0) {
+        passage(rx - 1, ry, 0, seed, &px, &py);
+        if (dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2) return true;
+    }
+    if (ry > 0) {
+        passage(rx, ry - 1, 1, seed, &px, &py);
+        if (dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2) return true;
+    }
+    return false;
+}
+
 tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
     if (x == DOCK_X && y == DOCK_Y) return TILE_DOCK;
@@ -116,6 +178,7 @@ tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
     if (e < 26214) return TILE_DEEP;
     if (e < 36045) return TILE_WATER;
     if (e < 39322) return TILE_SHALLOW;
+    if (on_channel(x, y, seed)) return TILE_SHALLOW; // terra no caminho: o canal corta como um rio
     if (e < 40632) return TILE_SAND;
     if (e < 43909) return TILE_GRASS;
     if (e < 47186) return TILE_FOREST;

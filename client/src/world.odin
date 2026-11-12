@@ -4,8 +4,8 @@ package game
 // só com inteiros, para o cliente (WASM) e o ESP32 chegarem no mesmo mapa.
 // O servidor manda o checksum no S_WELCOME e o cliente confere.
 
-MAP_W :: 512
-MAP_H :: 512
+MAP_W :: 1024
+MAP_H :: 1024
 
 PORT_X :: MAP_W / 2
 PORT_Y :: MAP_H / 2
@@ -134,6 +134,70 @@ blended_params :: proc(x, y: i32, seed: u32) -> Biome_Params {
 	}
 }
 
+// ---------------------------------------------------------------- canais
+
+// Igual ao world.c: cada divisa tem um ponto de passagem e um canal reto liga
+// o centro da região aos pontos dos seus 4 lados.
+@(private = "file")
+CHANNEL_JITTER :: 32
+@(private = "file")
+CHANNEL_WIDTH2 :: 2
+
+// Prende v dentro do mapa, longe 2 células da borda.
+@(private = "file")
+clamp_in :: proc(v, size: i32) -> i32 {return clamp(v, 2, size - 3)}
+
+// Ponto de passagem do lado direito (side 0) ou de baixo (side 1) da região.
+@(private = "file")
+passage :: proc(rx, ry: i32, side: int, seed: u32) -> (px, py: i32) {
+	sx: i32 = 1 if side == 0 else 0
+	sy: i32 = 1 if side == 1 else 0
+	h := world_hash(rx * 2 + sx, ry * 2 + sy, seed ~ 0xCA7A1)
+	jitter := i32(h % (2 * CHANNEL_JITTER + 1)) - CHANNEL_JITTER
+	if side == 0 {
+		return rx * REGION_CELLS + REGION_CELLS / 2, clamp_in(ry * REGION_CELLS + jitter, MAP_H)
+	}
+	return clamp_in(rx * REGION_CELLS + jitter, MAP_W), ry * REGION_CELLS + REGION_CELLS / 2
+}
+
+// Distância² de (x, y) até o segmento de (ax, ay) a (bx, by).
+@(private = "file")
+dist2_segment :: proc(x, y, ax, ay, bx, by: i32) -> i32 {
+	vx, vy := bx - ax, by - ay
+	len2 := vx * vx + vy * vy
+	t := clamp((x - ax) * vx + (y - ay) * vy, 0, len2)
+	cx, cy := ax, ay
+	if len2 != 0 {
+		cx += vx * t / len2
+		cy += vy * t / len2
+	}
+	return (x - cx) * (x - cx) + (y - cy) * (y - cy)
+}
+
+@(private = "file")
+on_channel :: proc(x, y: i32, seed: u32) -> bool {
+	rx, ry := world_region_of(x), world_region_of(y)
+	cx, cy := rx * REGION_CELLS, ry * REGION_CELLS
+	// Direita e baixo são desta região; esquerda e cima são da vizinha.
+	if rx + 1 < REGIONS_W {
+		px, py := passage(rx, ry, 0, seed)
+		if dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2 do return true
+	}
+	if ry + 1 < REGIONS_H {
+		px, py := passage(rx, ry, 1, seed)
+		if dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2 do return true
+	}
+	if rx > 0 {
+		px, py := passage(rx - 1, ry, 0, seed)
+		if dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2 do return true
+	}
+	if ry > 0 {
+		px, py := passage(rx, ry - 1, 1, seed)
+		if dist2_segment(x, y, cx, cy, px, py) <= CHANNEL_WIDTH2 do return true
+	}
+	return false
+}
+
 world_tile_at :: proc(x, y: i32, seed: u32) -> Tile {
 	if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do return .Mountain
 	if x == DOCK_X && y == DOCK_Y do return .Dock
@@ -156,6 +220,7 @@ world_tile_at :: proc(x, y: i32, seed: u32) -> Tile {
 	case e < 26214: return .Deep
 	case e < 36045: return .Water
 	case e < 39322: return .Shallow
+	case on_channel(x, y, seed): return .Shallow // terra no caminho: o canal corta como um rio
 	case e < 40632: return .Sand
 	case e < 43909: return .Grass
 	case e < 47186: return .Forest

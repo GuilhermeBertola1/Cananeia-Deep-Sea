@@ -678,7 +678,7 @@ on_net_message :: proc(data: []u8) {
 	case S_WELCOME:
 		s.my_id = read_u8(&r)
 		seed := read_u32(&r)
-		_ = read_u16(&r) // largura e altura: fixas por enquanto (512)
+		_ = read_u16(&r) // largura e altura: fixas por enquanto (MAP_W e MAP_H)
 		_ = read_u16(&r)
 		checksum := read_u32(&r)
 		if !r.ok do return
