@@ -3,7 +3,7 @@ package game
 // Lado do cliente do protocolo binário (docs/protocol.md e
 // server/components/game/include/protocol.h). Little-endian, uma mensagem por frame.
 
-PROTOCOL_VERSION :: 10
+PROTOCOL_VERSION :: 11
 NAME_MAX_LEN :: 16
 PASSWORD_MIN_LEN :: 4
 PASSWORD_MAX_LEN :: 32

@@ -141,9 +141,13 @@ State :: struct {
 	// mundo
 	seed:          u32,
 	tiles:         [MAP_W * MAP_H]Tile,
-	map_ready:     bool,
+	map_ready:     bool, // já tem semente; as regiões são geradas aos poucos
 	map_mismatch:  bool,
+	region_ready:  [REGIONS_W * REGIONS_H]bool, // região já gerada (e no minimapa)
+	region_sum:    [REGIONS_W * REGIONS_H]u32, // checksum de cada região, vem no S_WELCOME
+	have_sums:     bool,
 	minimap:       rl.Texture2D,
+	minimap_dirty: bool, // alguma região nova: refazer a textura do minimapa
 
 	// eu
 	my_id:         u8,
@@ -351,6 +355,11 @@ close_npcs :: proc() {
 
 @(private = "file")
 update_playing :: proc() {
+	load_regions_near(s.x, s.y)
+	if s.minimap_dirty {
+		minimap_build()
+		s.minimap_dirty = false
+	}
 	if rl.IsKeyPressed(.I) {
 		s.inv_open = !s.inv_open
 		close_npcs()
@@ -567,7 +576,44 @@ offline_move :: proc(dx, dy: i8) {
 
 tile_at :: proc(x, y: i32) -> Tile {
 	if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do return .Mountain
+	ensure_region(world_region_of(x), world_region_of(y))
 	return s.tiles[y * MAP_W + x]
+}
+
+// --- regiões do mapa ------------------------------------------------------------
+// O cliente não gera o mapa inteiro na entrada: cada região é gerada na
+// primeira vez que alguém olha para ela (tile_at) e fica guardada em s.tiles.
+
+region_index :: proc(rx, ry: i32) -> int {return int(ry * REGIONS_W + rx)}
+
+@(private = "file")
+ensure_region :: proc(rx, ry: i32) {
+	if rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H do return
+	i := region_index(rx, ry)
+	if s.region_ready[i] do return
+	world_generate_region(&s.tiles, rx, ry, s.seed)
+	s.region_ready[i] = true
+	s.minimap_dirty = true
+	check_region(rx, ry)
+}
+
+// Confere a região com o checksum que o servidor mandou.
+@(private = "file")
+check_region :: proc(rx, ry: i32) {
+	if !s.have_sums || s.map_mismatch do return
+	if world_region_checksum(&s.tiles, rx, ry) != s.region_sum[region_index(rx, ry)] {
+		s.map_mismatch = true
+		add_log("ATENÇÃO: mapa diferente do servidor!")
+	}
+}
+
+// Deixa pronta a região do barco e as 8 em volta, para não travar na divisa.
+@(private = "file")
+load_regions_near :: proc(x, y: i32) {
+	rx, ry := world_region_of(x), world_region_of(y)
+	for dy in i32(-1) ..= 1 {
+		for dx in i32(-1) ..= 1 do ensure_region(rx + dx, ry + dy)
+	}
 }
 
 @(private = "file")
@@ -664,9 +710,10 @@ on_net_close :: proc() {
 @(private = "file")
 welcome :: proc(seed: u32) {
 	if !s.map_ready || seed != s.seed {
+		// Semente nova: esquece as regiões geradas (mesma semente: reaproveita).
 		s.seed = seed
-		world_generate(&s.tiles, seed)
-		minimap_build()
+		s.region_ready = {}
+		s.minimap_dirty = true
 		s.map_ready = true
 	}
 	s.screen = .Playing
@@ -680,11 +727,20 @@ on_net_message :: proc(data: []u8) {
 		seed := read_u32(&r)
 		_ = read_u16(&r) // largura e altura: fixas por enquanto (MAP_W e MAP_H)
 		_ = read_u16(&r)
-		checksum := read_u32(&r)
+		_ = read_u8(&r) // ticks por segundo
+		rw, rh := read_u8(&r), read_u8(&r)
+		if !r.ok || int(rw) != REGIONS_W || int(rh) != REGIONS_H do return
+		for i in 0 ..< len(s.region_sum) do s.region_sum[i] = read_u32(&r)
 		if !r.ok do return
 		welcome(seed)
-		s.map_mismatch = world_checksum(&s.tiles) != checksum
-		if s.map_mismatch do add_log("ATENÇÃO: mapa diferente do servidor!")
+		s.have_sums = true
+		s.map_mismatch = false
+		// Regiões que já estavam prontas (reconexão) são conferidas agora.
+		for ry in i32(0) ..< REGIONS_H {
+			for rx in i32(0) ..< REGIONS_W {
+				if s.region_ready[region_index(rx, ry)] do check_region(rx, ry)
+			}
+		}
 
 	case S_ERROR:
 		switch read_u8(&r) {

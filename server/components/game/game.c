@@ -292,7 +292,8 @@ typedef struct {
 
 static struct {
     uint8_t *tiles;
-    uint32_t seed, checksum, tick, rng;
+    uint32_t seed, tick, rng;
+    uint32_t region_sum[REGIONS_W * REGIONS_H]; // checksum de cada região, para o cliente conferir
     game_send_fn send;
     player_t players[MAX_PLAYERS];
     school_t schools[MAX_SCHOOLS];
@@ -2207,8 +2208,10 @@ static void join(int slot, const uint8_t *data, size_t len) {
     put_u32(&w, g.seed);
     put_u16(&w, MAP_W);
     put_u16(&w, MAP_H);
-    put_u32(&w, g.checksum);
     put_u8(&w, TICK_HZ);
+    put_u8(&w, REGIONS_W);
+    put_u8(&w, REGIONS_H);
+    for (int i = 0; i < REGIONS_W * REGIONS_H; i++) put_u32(&w, g.region_sum[i]);
     send_w(slot, &w);
 
     // Apresenta todo mundo para o novo jogador e o novo jogador para todo mundo.
@@ -2314,7 +2317,8 @@ void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn
     g.rng = random_seed ? random_seed : 0x9E3779B9u;
     g.send = send;
     world_generate(tiles, seed);
-    g.checksum = world_checksum(tiles);
+    for (int ry = 0; ry < REGIONS_H; ry++)
+        for (int rx = 0; rx < REGIONS_W; rx++) g.region_sum[ry * REGIONS_W + rx] = world_region_checksum(tiles, rx, ry);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
     place_mermaid();
     place_villages();

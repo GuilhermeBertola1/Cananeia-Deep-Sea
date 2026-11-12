@@ -25,10 +25,19 @@ minimap_color :: proc(t: Tile) -> rl.Color {
 	return TILE_STYLE[t].fg
 }
 
-// Desenha o mapa inteiro numa textura uma vez só (gerada aqui, não é arquivo).
+// Desenha numa textura as regiões que já foram geradas; as outras ficam
+// escuras até o barco chegar perto. Roda de novo a cada região nova.
 minimap_build :: proc() {
 	pixels := make([]rl.Color, MAP_W * MAP_H, context.temp_allocator)
-	for t, i in s.tiles do pixels[i] = minimap_color(t)
+	for t, i in s.tiles {
+		x, y := i32(i % MAP_W), i32(i / MAP_W)
+		seen := s.region_ready[region_index(world_region_of(x), world_region_of(y))]
+		pixels[i] = minimap_color(t) if seen else rl.Color{4, 10, 22, 255}
+	}
+	if s.minimap.id != 0 {
+		rl.UpdateTexture(s.minimap, raw_data(pixels)) // mesmo tamanho: só troca os pixels
+		return
+	}
 	img := rl.Image {
 		data    = raw_data(pixels),
 		width   = MAP_W,
@@ -36,7 +45,6 @@ minimap_build :: proc() {
 		mipmaps = 1,
 		format  = .UNCOMPRESSED_R8G8B8A8,
 	}
-	if s.minimap.id != 0 do rl.UnloadTexture(s.minimap)
 	s.minimap = rl.LoadTextureFromImage(img)
 }
 

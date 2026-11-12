@@ -185,10 +185,38 @@ tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
     return TILE_MOUNTAIN;
 }
 
-void world_generate(uint8_t *tiles, uint32_t seed) {
-    for (int32_t y = 0; y < MAP_H; y++)
-        for (int32_t x = 0; x < MAP_W; x++)
+void world_region_rect(int32_t rx, int32_t ry, int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1) {
+    // As células da região são as que world_region_of() manda para ela.
+    *x0 = rx * REGION_CELLS - REGION_CELLS / 2;
+    *y0 = ry * REGION_CELLS - REGION_CELLS / 2;
+    *x1 = *x0 + REGION_CELLS;
+    *y1 = *y0 + REGION_CELLS;
+    if (*x0 < 0) *x0 = 0;
+    if (*y0 < 0) *y0 = 0;
+    if (*x1 > MAP_W) *x1 = MAP_W;
+    if (*y1 > MAP_H) *y1 = MAP_H;
+}
+
+void world_generate_region(uint8_t *tiles, int32_t rx, int32_t ry, uint32_t seed) {
+    int32_t x0, y0, x1, y1;
+    world_region_rect(rx, ry, &x0, &y0, &x1, &y1);
+    for (int32_t y = y0; y < y1; y++)
+        for (int32_t x = x0; x < x1; x++)
             tiles[y * MAP_W + x] = (uint8_t)world_tile_at(x, y, seed);
+}
+
+uint32_t world_region_checksum(const uint8_t *tiles, int32_t rx, int32_t ry) {
+    int32_t x0, y0, x1, y1;
+    world_region_rect(rx, ry, &x0, &y0, &x1, &y1);
+    uint32_t h = 2166136261u;
+    for (int32_t y = y0; y < y1; y++)
+        for (int32_t x = x0; x < x1; x++) h = (h ^ tiles[y * MAP_W + x]) * 16777619u;
+    return h;
+}
+
+void world_generate(uint8_t *tiles, uint32_t seed) {
+    for (int32_t ry = 0; ry < REGIONS_H; ry++)
+        for (int32_t rx = 0; rx < REGIONS_W; rx++) world_generate_region(tiles, rx, ry, seed);
 }
 
 uint32_t world_checksum(const uint8_t *tiles) {

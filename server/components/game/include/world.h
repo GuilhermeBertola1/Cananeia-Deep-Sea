@@ -49,7 +49,13 @@ biome_t world_region_biome(int32_t rx, int32_t ry, uint32_t seed);
 int32_t world_region_of(int32_t v); // região (rx ou ry) de uma coordenada x ou y
 tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed);
 void world_generate(uint8_t *tiles, uint32_t seed); // tiles: MAP_W * MAP_H bytes
-uint32_t world_checksum(const uint8_t *tiles);      // FNV-1a, para comparar com o cliente
+uint32_t world_checksum(const uint8_t *tiles);      // FNV-1a do mapa inteiro
+
+// Uma região por vez: o cliente só gera as regiões perto do barco.
+// O retângulo é [x0, x1) × [y0, y1), já cortado na borda do mapa.
+void world_region_rect(int32_t rx, int32_t ry, int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1);
+void world_generate_region(uint8_t *tiles, int32_t rx, int32_t ry, uint32_t seed);
+uint32_t world_region_checksum(const uint8_t *tiles, int32_t rx, int32_t ry); // FNV-1a da região
 
 static inline bool tile_is_water(tile_t t) { return t <= TILE_SHALLOW; }
 static inline bool tile_is_sailable(tile_t t) { return t <= TILE_SHALLOW || t == TILE_DOCK; }

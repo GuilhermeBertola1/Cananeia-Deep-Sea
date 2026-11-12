@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PROTOCOL_VERSION 10
+#define PROTOCOL_VERSION 11
 #define NAME_MAX_LEN 16
 #define PASSWORD_MIN_LEN 4
 #define PASSWORD_MAX_LEN 32
@@ -30,7 +30,7 @@ enum {
 
 // Servidor -> cliente
 enum {
-    S_WELCOME = 0x81, // u8 seu_id, u32 seed, u16 map_w, u16 map_h, u32 checksum, u8 tick_hz
+    S_WELCOME = 0x81, // u8 seu_id, u32 seed, u16 map_w, u16 map_h, u8 tick_hz, u8 rw, u8 rh, rw*rh u32 checksum
     S_ERROR = 0x82,   // u8 código (ERR_*)
     S_STATE = 0x83,   // estado visível, todo tick
     S_PLAYER = 0x84,  // u8 id, u8 cor, u8 len, nome[len]

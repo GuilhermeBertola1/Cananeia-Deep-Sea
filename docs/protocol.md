@@ -39,7 +39,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 
 | Byte | Mensagem | Quando | Conteúdo |
 | --- | --- | --- | --- |
-| `0x81` | `S_WELCOME` | ao entrar | `u8` seu id, `u32` semente do mapa, `u16` largura, `u16` altura, `u32` checksum do mapa, `u8` ticks por segundo |
+| `0x81` | `S_WELCOME` | ao entrar | `u8` seu id, `u32` semente do mapa, `u16` largura, `u16` altura, `u8` ticks por segundo, `u8` regiões na horizontal (rw), `u8` regiões na vertical (rh), rw × rh × `u32` checksum de cada região (linha por linha) |
 | `0x82` | `S_ERROR` | entrada recusada | `u8` código: 1 nome inválido, 2 nome já online, 3 servidor lotado, 4 versão diferente, 5 senha inválida (tamanho ou caractere), 6 senha errada |
 | `0x83` | `S_STATE` | todo tick (10/s) | ver abaixo |
 | `0x84` | `S_PLAYER` | quando alguém entra | `u8` id, `u8` cor, `nome` |
@@ -315,7 +315,7 @@ Sem HTTPS a senha viaja aberta no Wi-Fi. Serve para ninguém entrar com o seu no
 
 ## Mapa
 
-O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da semente, usando só inteiros (`world.c` e `world.odin` fazem a mesma conta). O servidor manda o checksum FNV-1a dos 512 × 512 tiles no `S_WELCOME` e o cliente avisa no diário se o mapa dele ficou diferente.
+O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da semente, usando só inteiros (`world.c` e `world.odin` fazem a mesma conta). O mapa tem 1024 × 1024 tiles divididos em regiões de 128 × 128 (centradas a cada 128 células, então são 9 × 9 e as da borda são cortadas). O cliente gera cada região só quando o barco chega perto. O servidor manda no `S_WELCOME` o checksum FNV-1a de cada região, e o cliente confere cada uma quando gera e avisa no diário se alguma ficou diferente.
 
 ## Espécies
 
