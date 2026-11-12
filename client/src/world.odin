@@ -13,6 +13,23 @@ PORT_RADIUS :: 7
 DOCK_X :: PORT_X
 DOCK_Y :: PORT_Y + PORT_RADIUS
 
+// Regiões: igual ao world.h. A região de uma célula é a do centro mais perto.
+REGION_CELLS :: 128
+REGIONS_W :: MAP_W / REGION_CELLS + 1
+REGIONS_H :: MAP_H / REGION_CELLS + 1
+PORT_RX :: PORT_X / REGION_CELLS
+PORT_RY :: PORT_Y / REGION_CELLS
+
+// A ordem é a mesma do biome_t do servidor.
+Biome :: enum u8 {
+	Bay,      // Baía
+	Mangrove, // Mangue
+	Islands,  // Arquipélago
+	Open,     // Mar aberto
+	Reef,     // Recife
+	Abyss,    // Abismo
+}
+
 Tile :: enum u8 {
 	Deep,
 	Water,
@@ -64,11 +81,57 @@ fbm :: proc(x, y: i32, seed: u32) -> i32 {
 	return sum / 31
 }
 
+// ---------------------------------------------------------------- regiões
+
+// bias: soma na média do ruído; amp: quanto ele varia, em %. Igual ao world.c.
 @(private = "file")
-isqrt :: proc(n: i32) -> i32 {
-	r: i32
-	for (r + 1) * (r + 1) <= n do r += 1
-	return r
+Biome_Params :: struct {
+	bias, amp: i32,
+}
+
+@(private = "file")
+BIOME_PARAMS := [Biome]Biome_Params {
+	.Bay      = {2000, 70},
+	.Mangrove = {5500, 50},
+	.Islands  = {3000, 150},
+	.Open     = {-5000, 60},
+	.Reef     = {4000, 100},
+	.Abyss    = {-12000, 40},
+}
+
+@(private = "file")
+RING_BIOMES := [4][4]Biome {
+	{.Bay, .Bay, .Bay, .Bay},
+	{.Bay, .Mangrove, .Islands, .Islands},
+	{.Mangrove, .Islands, .Open, .Reef},
+	{.Open, .Reef, .Abyss, .Abyss},
+}
+
+world_region_of :: proc(v: i32) -> i32 {return (v + REGION_CELLS / 2) / REGION_CELLS}
+
+world_region_biome :: proc(rx, ry: i32, seed: u32) -> Biome {
+	ring := max(abs(rx - PORT_RX), abs(ry - PORT_RY))
+	ring = min(ring, len(RING_BIOMES) - 1)
+	h := world_hash(rx, ry, seed ~ 0xB10E)
+	return RING_BIOMES[ring][h % 4]
+}
+
+@(private = "file")
+mix :: proc(a, b, t: i32) -> i32 {return a + i32(i64(b - a) * i64(t) / ONE)}
+
+@(private = "file")
+blended_params :: proc(x, y: i32, seed: u32) -> Biome_Params {
+	rx, ry := x / REGION_CELLS, y / REGION_CELLS
+	fx := smooth((x % REGION_CELLS) * ONE / REGION_CELLS)
+	fy := smooth((y % REGION_CELLS) * ONE / REGION_CELLS)
+	a := BIOME_PARAMS[world_region_biome(rx, ry, seed)]
+	b := BIOME_PARAMS[world_region_biome(rx + 1, ry, seed)]
+	c := BIOME_PARAMS[world_region_biome(rx, ry + 1, seed)]
+	d := BIOME_PARAMS[world_region_biome(rx + 1, ry + 1, seed)]
+	return {
+		bias = mix(mix(a.bias, b.bias, fx), mix(c.bias, d.bias, fx), fy),
+		amp = mix(mix(a.amp, b.amp, fx), mix(c.amp, d.amp, fx), fy),
+	}
 }
 
 world_tile_at :: proc(x, y: i32, seed: u32) -> Tile {
@@ -86,8 +149,9 @@ world_tile_at :: proc(x, y: i32, seed: u32) -> Tile {
 	if d2 <= 10 * 10 do return .Shallow
 	if d2 <= 21 * 21 do return .Water
 
-	// Quanto mais longe do centro, mais fundo fica o mar.
-	e := fbm(x, y, seed) - isqrt(d2) * 14
+	// O bioma da região decide a média e a força do ruído.
+	bp := blended_params(x, y, seed)
+	e := ONE / 2 + (fbm(x, y, seed) - ONE / 2) * bp.amp / 100 + bp.bias
 	switch {
 	case e < 26214: return .Deep
 	case e < 36045: return .Water

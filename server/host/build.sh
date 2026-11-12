@@ -5,3 +5,4 @@ G=../components/game
 cc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I$G/include \
    main.c storage_file.c password_host.c $G/world.c $G/fish.c $G/items.c $G/boat.c $G/weapon.c $G/game.c -o cananeia-host
 cc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I$G/include bots.c -o bots
+cc -std=c11 -O2 -Wall -Wextra -I$G/include mapa.c $G/world.c -o mapa

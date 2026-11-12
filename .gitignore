@@ -6,6 +6,8 @@ server/host/cananeia-host
 server/host/test_items
 server/host/test_password
 server/host/bots
+server/host/mapa
+*.bmp
 *.exe
 *.obj
 *.pdb

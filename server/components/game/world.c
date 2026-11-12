@@ -38,10 +38,65 @@ static int32_t fbm(int32_t x, int32_t y, uint32_t seed) {
     return sum / 31;
 }
 
-static int32_t isqrt(int32_t n) {
-    int32_t r = 0;
-    while ((r + 1) * (r + 1) <= n) r++;
-    return r;
+// ---------------------------------------------------------------- regiões
+
+// Cada bioma muda duas coisas no ruído:
+//   bias: soma no valor médio (mais alto = mais terra, mais baixo = mais fundo)
+//   amp:  quanto o ruído varia em volta da média, em % (mais = ilhas mais altas)
+typedef struct {
+    int32_t bias;
+    int32_t amp;
+} biome_params_t;
+
+static const biome_params_t BIOME_PARAMS[BIOME_COUNT] = {
+    [BIOME_BAY] = {2000, 70},
+    [BIOME_MANGROVE] = {5500, 50},
+    [BIOME_ISLANDS] = {3000, 150},
+    [BIOME_OPEN] = {-5000, 60},
+    [BIOME_REEF] = {4000, 100},
+    [BIOME_ABYSS] = {-12000, 40},
+};
+
+// Quais biomas podem sair em cada anel em volta do porto (anel 0 = a região
+// do porto, anel 1 = as 8 vizinhas...). O último vale para os anéis de fora.
+#define RINGS 4
+static const uint8_t RING_BIOMES[RINGS][4] = {
+    {BIOME_BAY, BIOME_BAY, BIOME_BAY, BIOME_BAY},
+    {BIOME_BAY, BIOME_MANGROVE, BIOME_ISLANDS, BIOME_ISLANDS},
+    {BIOME_MANGROVE, BIOME_ISLANDS, BIOME_OPEN, BIOME_REEF},
+    {BIOME_OPEN, BIOME_REEF, BIOME_ABYSS, BIOME_ABYSS},
+};
+
+static int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
+
+int32_t world_region_of(int32_t v) { return (v + REGION_CELLS / 2) / REGION_CELLS; }
+
+biome_t world_region_biome(int32_t rx, int32_t ry, uint32_t seed) {
+    int32_t ring = iabs(rx - PORT_RX) > iabs(ry - PORT_RY) ? iabs(rx - PORT_RX) : iabs(ry - PORT_RY);
+    if (ring >= RINGS) ring = RINGS - 1;
+    uint32_t h = world_hash(rx, ry, seed ^ 0xB10E);
+    return (biome_t)RING_BIOMES[ring][h % 4];
+}
+
+// Anda a fração t (0..ONE) do caminho de a até b.
+static int32_t mix(int32_t a, int32_t b, int32_t t) { return a + (int32_t)((int64_t)(b - a) * t / ONE); }
+
+// Mistura os parâmetros dos 4 centros de região em volta de (x, y), com a
+// mesma curva suave do ruído. Assim a divisa entre dois biomas é uma
+// transição de umas 100 células, e não uma linha reta no mapa.
+static biome_params_t blended_params(int32_t x, int32_t y, uint32_t seed) {
+    int32_t rx = x / REGION_CELLS, ry = y / REGION_CELLS;
+    int32_t fx = smooth((x % REGION_CELLS) * ONE / REGION_CELLS);
+    int32_t fy = smooth((y % REGION_CELLS) * ONE / REGION_CELLS);
+    biome_params_t a = BIOME_PARAMS[world_region_biome(rx, ry, seed)];
+    biome_params_t b = BIOME_PARAMS[world_region_biome(rx + 1, ry, seed)];
+    biome_params_t c = BIOME_PARAMS[world_region_biome(rx, ry + 1, seed)];
+    biome_params_t d = BIOME_PARAMS[world_region_biome(rx + 1, ry + 1, seed)];
+    biome_params_t out = {
+        .bias = mix(mix(a.bias, b.bias, fx), mix(c.bias, d.bias, fx), fy),
+        .amp = mix(mix(a.amp, b.amp, fx), mix(c.amp, d.amp, fx), fy),
+    };
+    return out;
 }
 
 tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
@@ -55,8 +110,9 @@ tile_t world_tile_at(int32_t x, int32_t y, uint32_t seed) {
     if (d2 <= 10 * 10) return TILE_SHALLOW;
     if (d2 <= 21 * 21) return TILE_WATER;
 
-    // Quanto mais longe do centro, mais fundo fica o mar.
-    int32_t e = fbm(x, y, seed) - isqrt(d2) * 14;
+    // O bioma da região decide a média e a força do ruído.
+    biome_params_t bp = blended_params(x, y, seed);
+    int32_t e = ONE / 2 + (fbm(x, y, seed) - ONE / 2) * bp.amp / 100 + bp.bias;
     if (e < 26214) return TILE_DEEP;
     if (e < 36045) return TILE_WATER;
     if (e < 39322) return TILE_SHALLOW;
