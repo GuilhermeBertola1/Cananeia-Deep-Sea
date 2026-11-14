@@ -198,7 +198,7 @@ draw_terrain :: proc(v: View, layer: Layer) {
 		for sx in 0 ..< v.cols {
 			x, y := v.ox + sx, v.oy + sy
 			if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do continue
-			t := s.tiles[y * MAP_W + x]
+			t := tile_at(x, y)
 			if tile_is_water(t) != (layer == .Ocean) do continue
 			style := TILE_STYLE[t]
 			rl.DrawRectangle(sx * CELL_W, sy * CELL_H, CELL_W, CELL_H, style.bg)

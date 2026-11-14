@@ -30,7 +30,8 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 | v0.9 | Shaders de água, luz e clima; polimento | Pronta |
 | v1.0 | Lançamento: 8 jogadores no ESP32 | Pronta |
 | v1.1 | Comércio: armeiro e mascates nas vilas | Pronta |
-| v1.2 | Mapa procedural montado por regiões | Próxima |
+| v1.2 | Mapa procedural montado por regiões | Pronta |
+| v1.3 | Agentes adaptativos: NPCs e bosses que aprendem | Próxima |
 
 ---
 
@@ -159,12 +160,31 @@ Cada versão entrega algo jogável. A ordem segue a seção 18 da especificaçã
 
 **Pronta quando:** um capitão novo compra um arpão no forte e equipa; dois capitães na mesma vila veem o mesmo item sumir quando um compra; e a encomenda entregue logo depois de outra paga menos.
 
-## v1.2: Mapa por regiões (próxima)
+## v1.2: Mapa por regiões (pronta)
 
 **Objetivo:** o mapa deixa de ser um quadro fixo de 512 × 512 gerado todo de uma vez. Ele é montado por regiões, geradas só quando alguém chega perto, para poder ficar bem maior.
 
-- [ ] Desenhar como as regiões são montadas e mandadas para o cliente
-- [ ] Servidor e cliente geram a mesma região a partir da semente (como hoje com `world.c` e `world.odin`)
-- [ ] Porto, sereia, vilas e forte continuam no mesmo lugar para a mesma semente
+- [x] Regiões de 128 × 128 com bioma pela distância do porto, e canais entre elas
+- [x] Servidor e cliente geram a mesma região a partir da semente, conferida pelas regiões de teste do `S_WELCOME`
+- [x] Mundo de 65536 × 65536 em chunks de 64 × 64, só onde tem barco perto
+- [x] Cardumes e tubarões em volta de cada barco, com a densidade do bioma
+- [x] Estoque de peixe só nas regiões pescadas, e espécies puxadas pelo bioma
+- [x] Vilas e sereias por região, que só aparecem no mapa quando estão perto
+- [x] Waypoints que só o jogador vê
+- [x] Um mercado por balcão, com procura pelo bioma e difusão entre vizinhos
+- [x] Robôs exploradores e protocolo v11
+- [x] Perfis da v1.1 continuam valendo (quem estava no mapa antigo volta ao porto)
 
-O plano em passos sai antes de começar a versão.
+**Pronta quando:** `test_mapa.exe` passa nas 201 sementes; dois capitães navegando para lados opostos veem o mar cheio de cardumes; uma vila longe do porto aparece no mapa só quando o barco chega perto; e vender 200 sardinhas no porto derruba o preço lá bem mais que nas vilas vizinhas.
+
+## v1.3: Agentes adaptativos (próxima)
+
+**Objetivo:** pescadores NPC, mascates e bosses que mudam o jeito de agir conforme o que dá certo, e o jogo pode rodar sem rede, como simulação.
+
+- [ ] Simulação sem rede (o núcleo do jogo numa biblioteca) para rodar muitas partidas rápido
+- [ ] Pescadores NPC com estratégias diferentes, escolhidas pelo que rende mais
+- [ ] Mascates, armeiro e encomendas que ajustam o preço pela procura
+- [ ] Bosses que escolhem a tática pelo que funcionou contra a turma
+- [ ] Mobs novos: boto-cinza, água-viva, barracuda, jacaré, orca e piratas
+
+O plano em passos sai antes de começar a versão. Depois vêm a v1.4 (aprendizado por reforço com os barcos como agentes) e a v1.5 (NPCs com a rede treinada embutida).

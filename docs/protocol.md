@@ -34,22 +34,24 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x0B` | `C_COMBINE` | `u8` índice a, `u8` índice b na bolsa: o mecânico junta os dois itens (mesmo tipo) num só, no lugar de `a`. Só no cais |
 | `0x0C` | `C_BUY` | `u8` loja (0 armeiro, 1 + v mascate da vila v), `u8` oferta. No armeiro, só no cais do forte; no mascate, só no cais daquela vila |
 | `0x0D` | `C_DELIVER` | Entrega a encomenda do mascate da vila onde o barco está |
+| `0x0E` | `C_WAYPOINT` | `u8` índice (0 a 7), `u16` x, `u16` y: marca o waypoint; x = y = 0 apaga |
 
 ## Servidor → cliente
 
 | Byte | Mensagem | Quando | Conteúdo |
 | --- | --- | --- | --- |
-| `0x81` | `S_WELCOME` | ao entrar | `u8` seu id, `u32` semente do mapa, `u16` largura, `u16` altura, `u32` checksum do mapa, `u8` ticks por segundo |
+| `0x81` | `S_WELCOME` | ao entrar | `u8` seu id, `u32` semente do mapa, `u32` largura, `u32` altura, `u8` ticks por segundo, `u8` n, n × (`u16` rx, `u16` ry, `u32` checksum) das regiões de teste |
 | `0x82` | `S_ERROR` | entrada recusada | `u8` código: 1 nome inválido, 2 nome já online, 3 servidor lotado, 4 versão diferente, 5 senha inválida (tamanho ou caractere), 6 senha errada |
 | `0x83` | `S_STATE` | todo tick (10/s) | ver abaixo |
 | `0x84` | `S_PLAYER` | quando alguém entra | `u8` id, `u8` cor, `nome` |
 | `0x85` | `S_EVENT` | pesca, venda... | `u8` tipo, `u8` espécie, `u16` quantidade, `u32` valor |
 | `0x86` | `S_RANK` | a cada 5 s e após vendas | `u8` n, n × (`u32` dinheiro, `u8` online, `nome`) |
 | `0x87` | `S_MARKS` | a cada 1 s e quando um saque cai ou some | `u8` n, n × (`u16` x, `u16` y, `u8` tipo, `u8` extra) — pontos do minimapa |
-| `0x88` | `S_PRICES` | a cada 1 s e após vendas | `u16` preço em centavos de cada espécie (9) |
+| `0x88` | `S_PRICES` | a cada 1 s, após vendas e quando o balcão mais perto muda | `u8` balcão (0 = porto, 1 + v = vila v), `u16` preço em centavos de cada espécie (9). Cada jogador recebe os preços do balcão mais perto dele (ver "Mercado" abaixo) |
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
 | `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
 | `0x8B` | `S_CATALOG` | a cada 1 s para quem está no cais de uma vila, e logo depois de uma compra, entrega ou troca | ver abaixo |
+| `0x8C` | `S_WAYPOINTS` | ao entrar e depois de cada `C_WAYPOINT` | `u8` n (8), n × (`u16` x, `u16` y): os waypoints do jogador, (0, 0) = vazio. Ficam no perfil e só o dono recebe |
 
 ### `S_STATE`
 
@@ -258,6 +260,8 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 
 ### Marcas do minimapa (`S_MARKS`)
 
+Cada barco recebe só os cardumes a até 1024 células dele (no máximo 120). Bags e coroas vão sempre. Forte, vilas e pedras da sereia só vão quando estão na tela do barco (até 50 células): o resto do mapa se descobre navegando. Vilas ficam em 1 de cada 3 regiões de Mangue ou Arquipélago, e a sereia em 1 de cada 2 regiões de Recife; o porto o cliente desenha sempre.
+
 | Tipo | Extra |
 | --- | --- |
 | 1 cardume | espécie |
@@ -269,16 +273,24 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 
 Bosses e outros NPCs entram aqui como tipos novos.
 
+### Mercado
+
+- Cada balcão de venda tem o seu mercado: o do porto é o balcão 0 e a vila `v` é o balcão `1 + v`. Vender no porto não mexe direto no preço da vila, e vice-versa.
+- **Procura**: cada balcão paga de 70% a 150% do preço base de cada espécie. Começa em 100%, menos 20% se a espécie sobra no bioma do balcão (a sardinha na Baía, o camarão no Mangue), mais 20% se ela é rara ali, e mais ou menos até 10% pela semente. A cada 10 min a procura anda até 5% para um lado, sem se afastar mais de 15% da inicial.
+- **Pressão**: vender 200 peixes de uma espécie num balcão derruba o preço dela ali pela metade (nunca abaixo de 30%). A pressão cai 1% por segundo.
+- **Difusão**: a cada 5 s, cada par de balcões a menos de 512 células (a maior distância entre `|dx|` e `|dy|`) troca 1% da diferença de pressão, menos quanto mais longe. O que sai de um entra no outro, então despejar peixe numa vila derruba um pouco o preço das vilas vizinhas, mas não o do mar todo.
+- O preço da vila para a espécie favorita dela leva mais 25% por cima de tudo isso.
+
 ### Comércio: armeiro e mascates
 
 - **Forte do armeiro** (na costa de uma ilha, 40 a 90 células do porto, longe da sereia e das vilas, sempre no mesmo lugar para a mesma semente; zona segura de 8 células): vende as armas comuns com a raridade garantida (afixos e números sorteados). Ofertas: 0 Arpão comum $40, 1 Arpão raro $400, 2 Mosquete comum $120, 3 Mosquete raro $1.000, 4 Canhão leve comum $300, 5 Canhão leve raro $2.400. Só cobra se couber na bolsa.
 - **Mascate** (no cais de cada vila): 2 itens épicos de qualquer tipo (menos as armas dos bosses), já com encanto +1 ou +2, a $40.000 mais $15.000 por nível de encanto. Uma unidade de cada: quem comprar primeiro leva, e o item fica vendido até a troca.
-- **Encomenda** (também no mascate): N peixes de uma espécie que está a 80% ou mais do preço cheio no mercado, uns $300 em peixe (de 5 a 50). Paga o dobro do preço do mercado **na hora da entrega**, mais um baú, e a entrega pesa no mercado como uma venda. Cada perfil entrega uma vez por catálogo.
+- **Encomenda** (também no mascate): N peixes de uma espécie que está a 80% ou mais do preço cheio no balcão da vila, uns $300 em peixe (de 5 a 50). Paga o dobro do preço do balcão da vila **na hora da entrega**, mais um baú, e a entrega pesa nesse balcão como uma venda. Cada perfil entrega uma vez por catálogo.
 - O catálogo de todas as vilas troca junto a cada 30 min. Ele não é salvo: o servidor que reinicia sorteia um novo.
 
 ### Ecossistema e eventos do mundo
 
-- **Estoque de peixe**: o mapa é dividido em 16 × 16 regiões de 32 × 32 células, cada uma com até 250 peixes. Pescar tira do estoque, e a chance de pescar é multiplicada por `estoque / 250`. O estoque cresce sozinho a cada 5 s (devagar quando está vazio ou cheio, rápido no meio): uma região vazia volta em uns 6 minutos. Cardumes nascem mais onde tem peixe e vão embora quando a região cai abaixo de 20%.
+- **Estoque de peixe**: o mapa é dividido em regiões de 32 × 32 células, cada uma com até 250 peixes. Só as regiões que alguém pescou ficam guardadas (as outras estão cheias). Pescar tira do estoque, e a chance de pescar é multiplicada por `estoque / 250`. O estoque cresce sozinho a cada 5 s (devagar quando está vazio ou cheio, rápido no meio): uma região vazia volta em uns 6 minutos. Cardumes nascem mais onde tem peixe e vão embora quando a região cai abaixo de 20%.
 - **Vilas** (3, entre 60 e 200 células do porto, na costa de outras ilhas, sempre no mesmo lugar para a mesma semente; zona segura de 10 células): o lojista e o reparo funcionam, e a vila paga 25% a mais pela espécie preferida. Estaleiro, mercenário e mecânico só no porto.
 - **Tubarões** (10 no mar, um novo a cada 30 s se faltar): só nadam em água funda ou normal, fora das zonas seguras. Caçam o barco mais perto a até 15 células que tenha menos de 120 de vida, a 7 células/s, e mordem 8 de vida a cada 1,5 s. Vida 0 por mordida é morte. 40 de vida; afundar um vale $15.
 - **Eventos**: um por vez, o primeiro de 2 a 4 min depois de o servidor ligar e depois um a cada 4 a 8 min, sempre a 40 células ou mais do porto e nunca dentro de zona segura.
@@ -315,7 +327,7 @@ Sem HTTPS a senha viaja aberta no Wi-Fi. Serve para ninguém entrar com o seu no
 
 ## Mapa
 
-O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da semente, usando só inteiros (`world.c` e `world.odin` fazem a mesma conta). O servidor manda o checksum FNV-1a dos 512 × 512 tiles no `S_WELCOME` e o cliente avisa no diário se o mapa dele ficou diferente.
+O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da semente, usando só inteiros (`world.c` e `world.odin` fazem a mesma conta). O mundo tem 65536 × 65536 tiles (as coordenadas cabem num `u16`), em regiões de 128 × 128 centradas a cada 128 células, com o porto no meio. Ninguém guarda o mundo inteiro: o servidor e o cliente geram em chunks de 64 × 64 só o que fica perto dos barcos. Para conferir a conta, o servidor manda no `S_WELCOME` o checksum FNV-1a de algumas regiões de teste (perto do porto, no mar distante e no abismo). O cliente gera cada uma ao entrar e avisa no diário se alguma ficou diferente.
 
 ## Espécies
 
@@ -330,3 +342,5 @@ O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da se
 | 6 | Polvo | $10 | fundo |
 | 7 | Peixe-espada | $15 | fundo |
 | 8 | Lula-gigante | $40 | fundo |
+
+A coluna "Bioma" é o tipo de água onde a espécie vive. O bioma da região do mapa (Baía, Mangue, Arquipélago, Mar aberto, Recife, Abismo) muda as chances: no Mangue sai mais camarão e caranguejo, no Recife mais polvo e tartaruga, no Mar aberto mais atum, no Abismo mais lula-gigante (tabela `BIOME_PCT` em `fish.c`). O bioma também decide quantos cardumes e tubarões ficam em volta do barco.

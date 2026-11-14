@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.2.0 (2026-11-14): mapa procedural
+
+- **Mundo de 65536 × 65536**, gerado pela semente dos dois lados e só onde tem barco perto. O servidor guarda o mar em chunks de 64 × 64 e o cliente guarda os que viu por último. O minimapa e o mapa grande andam junto com o barco
+- **Biomas** em regiões de 128 × 128: Baía em volta do porto, depois Mangue, Arquipélago, Mar aberto, Recife e Abismo. Quanto mais longe do porto, mais mar aberto e abismo. Canais entre as regiões garantem que dá para chegar em todo lugar perto do porto
+- **Peixe por bioma:** cada bioma puxa algumas espécies (mais camarão e caranguejo no Mangue, mais atum no Mar aberto, mais lula-gigante no Abismo). O estoque de peixe só existe nas regiões que alguém pescou, então o mapa grande não pesa na memória
+- **Mar cheio em volta de cada barco:** cada capitão tem uns 30 cardumes e de 2 a 8 tubarões em volta (menos no Abismo e na Baía, mais no Recife), nascendo fora da tela e sumindo quando ficam longe. Com os jogadores espalhados, ninguém fica com o mar vazio
+- **Vilas e sereias por região:** vilas em 1 de cada 3 regiões de Mangue ou Arquipélago, sereias em 1 de cada 2 de Recife. Elas só aparecem no mapa quando estão na tela do barco, então o mapa se descobre navegando. O porto e o forte continuam no mesmo lugar
+- **Waypoints:** com o mapa grande aberto (M), um clique marca um ponto (até 8) e um clique em cima apaga. As teclas 1 a 8 escolhem qual seguir, e o HUD mostra a distância e a direção. Ficam salvos no perfil, e só o dono vê
+- **Um mercado por balcão:** o porto e cada vila têm preços próprios. Peixe que sobra no bioma do balcão vale menos ali, e peixe raro vale mais (de 70% a 150% do preço base), e isso anda um pouco a cada 10 minutos. Vender muito num balcão derruba o preço dele, e um pouco do efeito escorre para os balcões a menos de 512 células. O painel mostra os preços do balcão mais perto
+- **Robôs exploradores:** metade dos robôs do `bots.exe` navega reto para longe do porto, para testar o mundo grande, e o relatório mostra o mais longe que um robô chegou
+- `mapa.exe` (no `server\host\build.bat`) desenha uma janela do mapa em BMP com os biomas, e o `test_mapa.exe` confere em 201 sementes que o mar em volta do porto e o mar distante são navegáveis
+- Protocolo versão 11: o `S_WELCOME` leva a largura, a altura e o checksum de 8 regiões de teste. Também entram `C_WAYPOINT`, `S_WAYPOINTS` e o número do balcão no `S_PRICES`
+- Os perfis da v1.1 continuam valendo. O `profile_t` ganhou `map_version` e os waypoints no fim, e quem estava no mapa antigo volta ao porto
+- O servidor não roda mais no ESP32: o mundo grande precisa de mais memória. A v1.1 é a última versão que roda lá
+
 ## v1.1.0 (2026-11-11): comércio
 
 - **Forte do armeiro** (`A`), numa ilha a uns 40 a 90 células do porto, sempre no mesmo lugar para a mesma semente, com zona segura em volta. **F** abre a loja: Arpão, Mosquete e Canhão leve, cada um em comum ou raro ($40/$400, $120/$1.000, $300/$2.400). A raridade é garantida, os afixos e os números saem sorteados como num baú, e só cobra se couber na bolsa. Longe dele, **F** diz para que lado e a quantas células ele fica

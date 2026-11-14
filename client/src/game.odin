@@ -8,12 +8,12 @@ import "core:strings"
 import rl "vendor:raylib"
 
 MAX_PLAYERS :: 8
-MAX_SCHOOLS :: 70
+MAX_SCHOOLS :: 288
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
-MAX_MARKS :: 107 // cardumes (70) + bags e coroas (32) + a sereia + o forte + 3 vilas
+MAX_MARKS :: 157 // cardumes (até 120 perto do barco) + bags e coroas (32) + a sereia + o forte + 3 vilas
 PEDDLER_ITEMS :: 2
-MAX_PREDATORS :: 12
+MAX_PREDATORS :: 68
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
 LOG_SIZE :: 6
@@ -140,10 +140,10 @@ State :: struct {
 
 	// mundo
 	seed:          u32,
-	tiles:         [MAP_W * MAP_H]Tile,
-	map_ready:     bool,
+	map_ready:     bool, // já tem semente; os tiles vêm do cache de chunks (chunks.odin)
 	map_mismatch:  bool,
-	minimap:       rl.Texture2D,
+	minimap:       Map_View, // janela em volta do barco, no painel
+	bigmap:        Map_View, // janela maior, com menos detalhe (tecla M)
 
 	// eu
 	my_id:         u8,
@@ -198,7 +198,7 @@ State :: struct {
 	boss:          Boss,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
-	prices:        [FISH_COUNT]int,
+	prices:        [FISH_COUNT]int, // do balcão mais perto (o servidor escolhe)
 
 	// interface
 	shop_open:     bool,
@@ -214,6 +214,9 @@ State :: struct {
 	inv_cursor:    int,
 	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
 	big_map:       bool,
+	bigmap_rect:   rl.Rectangle, // onde o mapa grande foi desenhado (para o clique)
+	waypoints:     [WAYPOINT_COUNT][2]i32, // x, y de cada waypoint; (0, 0) = vazio
+	wp_follow:     int, // waypoint que o HUD segue: número (1 a 8), 0 = nenhum
 	log:           [LOG_SIZE]Log_Line,
 	log_count:     int,
 	popups:        [8]Popup,
@@ -275,6 +278,7 @@ update :: proc() {
 	}
 	rl.EndDrawing()
 	free_all(context.temp_allocator)
+	chunks_next_frame()
 }
 
 shutdown :: proc() {
@@ -390,6 +394,14 @@ update_playing :: proc() {
 	}
 
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
+	// Mapa grande aberto: clique marca ou apaga um waypoint, 1 a 8 escolhe qual
+	// seguir (o mesmo número de novo para de seguir).
+	if s.big_map && !menu_open() {
+		if rl.IsMouseButtonPressed(.LEFT) do click_big_map()
+		for i in 0 ..< WAYPOINT_COUNT {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do s.wp_follow = 0 if s.wp_follow == i + 1 else i + 1
+		}
+	}
 	if rl.IsKeyPressed(.N) do add_log("Som ligado." if toggle_sound() else "Som desligado. N liga de novo.")
 	// E fala com quem está perto: o lojista no cais, a sereia na pedra dela.
 	if rl.IsKeyPressed(.E) && !s.inv_open {
@@ -565,9 +577,24 @@ offline_move :: proc(dx, dy: i8) {
 	s.at_dock = abs(s.x - DOCK_X) <= 1 && abs(s.y - DOCK_Y) <= 1
 }
 
-tile_at :: proc(x, y: i32) -> Tile {
-	if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H do return .Mountain
-	return s.tiles[y * MAP_W + x]
+tile_at :: proc(x, y: i32) -> Tile {return chunks_tile(x, y)}
+
+// --- conferência do mapa ------------------------------------------------------------
+// O cliente gera o mapa sozinho (chunks.odin). Para saber se ficou igual ao do
+// servidor, o S_WELCOME traz o checksum de algumas regiões de teste (perto do
+// porto, no mar distante e no abismo), e o cliente gera e confere cada uma ao entrar.
+
+@(private = "file")
+check_probes :: proc(r: ^Reader, seed: u32) {
+	s.map_mismatch = false
+	n := int(read_u8(r))
+	for _ in 0 ..< n {
+		rx, ry := i32(read_u16(r)), i32(read_u16(r))
+		sum := read_u32(r)
+		if !r.ok do return
+		if world_region_checksum(rx, ry, seed) != sum do s.map_mismatch = true
+	}
+	if s.map_mismatch do add_log("ATENÇÃO: mapa diferente do servidor!")
 }
 
 @(private = "file")
@@ -664,9 +691,11 @@ on_net_close :: proc() {
 @(private = "file")
 welcome :: proc(seed: u32) {
 	if !s.map_ready || seed != s.seed {
+		// Semente nova: esquece os chunks e os mapas desenhados (mesma semente: reaproveita).
 		s.seed = seed
-		world_generate(&s.tiles, seed)
-		minimap_build()
+		chunks_reset(seed)
+		s.minimap.built = false
+		s.bigmap.built = false
 		s.map_ready = true
 	}
 	s.screen = .Playing
@@ -678,13 +707,12 @@ on_net_message :: proc(data: []u8) {
 	case S_WELCOME:
 		s.my_id = read_u8(&r)
 		seed := read_u32(&r)
-		_ = read_u16(&r) // largura e altura: fixas por enquanto (512)
-		_ = read_u16(&r)
-		checksum := read_u32(&r)
+		_ = read_u32(&r) // largura e altura: fixas (MAP_W e MAP_H)
+		_ = read_u32(&r)
+		_ = read_u8(&r) // ticks por segundo
 		if !r.ok do return
 		welcome(seed)
-		s.map_mismatch = world_checksum(&s.tiles) != checksum
-		if s.map_mismatch do add_log("ATENÇÃO: mapa diferente do servidor!")
+		check_probes(&r, seed)
 
 	case S_ERROR:
 		switch read_u8(&r) {
@@ -970,6 +998,7 @@ on_net_message :: proc(data: []u8) {
 		}
 
 	case S_PRICES:
+		_ = read_u8(&r) // qual balcão: 0 = porto, 1 + v = vila v (o cliente não precisa)
 		for &p in s.prices do p = int(read_u16(&r))
 	
 
@@ -1006,6 +1035,13 @@ on_net_message :: proc(data: []u8) {
 		for &l in levels do l = int(read_u8(&r))
 		if !r.ok do return
 		s.boat_level = levels
+
+	case S_WAYPOINTS:
+		n := int(read_u8(&r))
+		for i in 0 ..< n {
+			x, y := i32(read_u16(&r)), i32(read_u16(&r))
+			if r.ok && i < WAYPOINT_COUNT do s.waypoints[i] = {x, y}
+		}
 
 	case S_CATALOG:
 		c := Catalog{village = int(read_u8(&r)), secs = int(read_u16(&r))}

@@ -1,5 +1,6 @@
 #include "game.h"
 #include "world.h"
+#include "chunks.h"
 #include "fish.h"
 #include "protocol.h"
 #include "storage.h"
@@ -8,7 +9,7 @@
 #include "boat.h"
 #include "weapon.h"
 
-#define MAX_SCHOOLS 70
+#define MAX_SCHOOLS 288 // até 36 por barco (no Recife), com 8 barcos espalhados
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
 #define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
 #define BASE_SPEED 5 // células por segundo
@@ -26,20 +27,14 @@
 // Posição do tiro em 1/256 de célula, para andar em qualquer ângulo só com inteiros.
 #define SUB 256
 #define CROWN_BOUNTY_CENTS 2500 // o mercenário paga $25 por coroa
-// A sereia mora numa pedra em mar aberto, longe do porto.
-#define MERMAID_MIN_DIST 70
-#define MERMAID_MAX_DIST 110
+// A sereia mora numa pedra no meio do Recife (ver "estruturas").
 #define MERMAID_REACH 3   // até quantas células dá para falar com ela
 #define MERMAID_SAFE_R 8  // zona segura em volta da pedra
 #define SPIN_COOLDOWN (60 * TICK_HZ) // uma volta na roleta por minuto
 #define STEAL_PCT 10
 #define STEAL_MAX_CENTS 10000 // ela rouba 10% do dinheiro, no máximo $100
-// Vilas de pescadores na costa de outras ilhas: vendem e consertam, e cada
-// uma paga mais por uma espécie.
-#define VILLAGE_COUNT 3
-#define VILLAGE_MIN_DIST 60   // do porto
-#define VILLAGE_MAX_DIST 200
-#define VILLAGE_SPACING 50    // de outra vila ou da sereia
+// Vilas de pescadores na costa das ilhas do Mangue e do Arquipélago: vendem e
+// consertam, e cada uma paga mais por uma espécie (ver "estruturas").
 #define VILLAGE_SAFE_R 10
 #define VILLAGE_BONUS_PCT 25  // a mais pela espécie preferida
 
@@ -47,7 +42,7 @@
 // para o jogador sair do porto para comprar a primeira arma.
 #define ARMORY_MIN_DIST 40   // do porto
 #define ARMORY_MAX_DIST 90
-#define ARMORY_SPACING 30    // da sereia e das vilas
+#define ARMORY_SPACING 30    // das vilas e das pedras da sereia
 #define ARMORY_SAFE_R 8
 
 // Mascate: em cada vila, ao lado do lojista. Vende itens épicos já
@@ -66,9 +61,8 @@
 
 // Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
 // nem nas zonas seguras, então a costa é um refúgio.
-#define MAX_PREDATORS 12
-#define SHARK_COUNT 10            // quantos tubarões o mar tenta manter
-#define SHARK_RESPAWN (30 * TICK_HZ) // um tubarão novo a cada 30 s, se faltar
+#define MAX_PREDATORS 68          // até 8 tubarões por barco (no Abismo) com 8 barcos, mais o navio fantasma
+#define SHARK_RESPAWN (15 * TICK_HZ) // a cada 15 s, um tubarão novo em cada barco que tiver menos
 #define SHARK_HP 40
 #define SHARK_BITE 8              // dano de cada mordida
 #define SHARK_BITE_EVERY 15       // ticks entre mordidas (1,5 s)
@@ -152,17 +146,32 @@
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
 
-// Mercado: vender 200 de uma espécie derruba o preço pela metade,
-// nunca abaixo de 30%, e a pressão cai 1% por segundo.
+// Mercado: cada balcão (o porto e cada vila) tem o seu. Vender 200 de uma
+// espécie num balcão derruba o preço dele pela metade, nunca abaixo de 30%,
+// e a pressão cai 1% por segundo. A pressão também escorre para os balcões
+// vizinhos (ver market_diffuse), então despejar peixe numa vila respinga nas
+// de perto, mas não no mar todo.
 #define MARKET_SATURATION 200000 // em milésimos de peixe
 #define MARKET_MIN_PCT 30
+// Procura: quanto o balcão quer de cada espécie, em % do preço base. Peixe
+// que sobra no bioma do balcão vale menos ali, peixe raro ali vale mais.
+#define DEMAND_MIN 70
+#define DEMAND_MAX 150
+#define DEMAND_BIOME 20                    // +-20% pelo bioma
+#define DEMAND_NOISE 10                    // +-10% de cada balcão (semente)
+#define DEMAND_DRIFT 5                     // a cada troca, anda até +-5%
+#define DEMAND_DRIFT_MAX 15                // e nunca se afasta mais que 15% do inicial
+#define DEMAND_DRIFT_EVERY (600 * TICK_HZ) // 10 min
+// Difusão: a cada 5 s, cada par de balcões a menos de 512 células troca 1% da
+// diferença de pressão, menos quanto mais longe.
+#define DIFFUSE_EVERY (5 * TICK_HZ)
+#define DIFFUSE_RANGE 512
+#define DIFFUSE_PCT 1
 
 // Ecossistema: o mar é dividido em regiões de 32x32 células, e cada uma tem
 // um estoque de peixe. Pescar tira do estoque, e com menos peixe a chance de
 // pescar ali cai junto. O estoque volta sozinho com o tempo.
 #define REGION_SIZE 32
-#define REGIONS_X (MAP_W / REGION_SIZE)
-#define REGIONS_Y (MAP_H / REGION_SIZE)
 #define STOCK_MAX 250                   // cabe num uint8_t
 #define STOCK_REGEN_EVERY (5 * TICK_HZ) // a cada 5 s as regiões crescem
 #define STOCK_GROWTH 2500               // maior = cresce mais devagar
@@ -173,7 +182,7 @@ typedef enum { SLOT_FREE = 0, SLOT_CONNECTED, SLOT_PLAYING } slot_state_t;
 typedef struct {
     slot_state_t state;
     int profile; // índice em g.profiles
-    int16_t x, y;
+    int32_t x, y;
     int8_t dx, dy;       // para onde o jogador quer ir (teclado)
     uint8_t heading;     // para onde a proa aponta (0 a 7, ver DIR_X)
     uint8_t turn_timer;  // ticks desde a última virada de 45°
@@ -187,6 +196,7 @@ typedef struct {
     uint32_t next_spin; // tick em que a roleta da sereia libera de novo
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
+    int16_t market; // balcão dos preços que o jogador recebeu por último (ver market_near)
 } player_t;
 
 typedef struct {
@@ -218,12 +228,13 @@ typedef struct {
 // Lugares com NPC: perto deles ninguém toma tiro. O porto e a pedra da
 // sereia (que só se sabe onde fica depois de gerar o mapa, em game_init).
 typedef struct {
-    int16_t x, y, r;
+    int32_t x, y;
+    int16_t r;
 } safe_zone_t;
 
 typedef struct {
     uint8_t alive, kind;
-    int16_t x, y;
+    int32_t x, y;
     int16_t hp;
     int8_t target;       // slot do barco que ele caça (-1 = nenhum)
     uint8_t heading;     // para onde nada quando só está passeando (0 a 7)
@@ -235,7 +246,8 @@ typedef struct {
 // O evento do mundo que está acontecendo agora (só um por vez).
 typedef struct {
     uint8_t kind;  // WORLD_* (WORLD_NONE = nada acontecendo)
-    int16_t x, y, r;
+    int32_t x, y;
+    int16_t r;
     int8_t dx, dy; // para onde sopra o vento da tempestade
     uint32_t ends; // tick em que acaba
 } world_event_t;
@@ -262,7 +274,7 @@ static const boss_info_t BOSSES[BOSS_COUNT] = {
 
 typedef struct {
     uint8_t kind;        // BOSS_* (BOSS_NONE = nenhum no mar)
-    int16_t x, y;
+    int32_t x, y;
     int16_t hp, hp_max;
     int8_t target;       // slot do barco que ele persegue (-1 = nenhum)
     uint8_t heading;     // para onde nada sem alvo (0 a 7)
@@ -274,12 +286,40 @@ typedef struct {
     uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
 } boss_t;
 
-enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_ARMORY, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
+// Zonas seguras fixas. As das vilas e da sereia vêm das estruturas (in_safe_zone).
+enum { ZONE_PORT = 0, ZONE_ARMORY, SAFE_ZONE_COUNT };
+
+// Estruturas: vilas e pedras da sereia não são mais fixas. Cada região do
+// mapa pode ter uma, sorteada pela semente (sempre a mesma no mesmo mapa). O
+// servidor só descobre o que tem numa região quando algum barco chega perto
+// (as 3x3 regiões em volta dele), porque achar o cais precisa olhar os tiles.
+#define STRUCT_SLOTS 2048  // hash por região; com metade cheia (1024 regiões vistas), recomeça do zero
+#define MAX_VILLAGES 200   // vilas com catálogo e encomenda; SHOP_VILLAGE + índice cabe num u8
+#define STRUCT_SEARCH 48   // o cais ou a pedra fica a até 48 células do centro da região
+#define VILLAGE_CHANCE 3   // 1 em 3 regiões de Mangue ou Arquipélago tem vila
+#define MERMAID_CHANCE 2   // 1 em 2 regiões de Recife tem pedra da sereia
+
+enum { STRUCT_NONE = 0, STRUCT_VILLAGE, STRUCT_MERMAID };
+
+// Um balcão de venda: o do porto ou o de uma vila.
+typedef struct {
+    uint32_t pressure[FISH_COUNT]; // milésimos de peixe vendidos ali, caindo com o tempo
+    uint8_t demand[FISH_COUNT];    // procura agora, em %
+    uint8_t base[FISH_COUNT];      // procura inicial: a deriva fica perto dela
+} market_t;
+
+typedef struct {
+    int16_t rx, ry;
+    uint8_t used, kind; // kind: STRUCT_*
+    int32_t x, y;       // cais da vila ou pedra da sereia
+    int16_t village;    // índice em g.villages (só vila)
+} structure_t;
 
 // Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
 typedef struct {
-    int16_t x, y;
+    int32_t x, y;
     uint8_t fav; // espécie que ela paga mais caro
+    market_t market;
     // Catálogo do mascate. Vendido: base = ITEM_NONE até a próxima troca.
     item_t offer[PEDDLER_ITEMS];
     uint8_t offer_enchant[PEDDLER_ITEMS];
@@ -290,20 +330,37 @@ typedef struct {
     uint8_t quest_done[MAX_PROFILES / 8];
 } village_t;
 
+// Regiões de teste: o cliente gera estas assim que entra e confere com o
+// checksum do servidor. Ficam perto do porto, no mar distante e no abismo
+// (anel 40), para pegar diferença em qualquer parte da conta dos biomas.
+#define PROBE_COUNT 8
+static const int8_t PROBES[PROBE_COUNT][2] = {{0, 0}, {1, 0}, {0, -1}, {-2, 2}, {3, -3}, {-7, 5}, {12, 9}, {-40, -25}};
+
+// Estoque esparso: a tabela só guarda as regiões de 32x32 que alguém pescou e
+// que ainda não encheram de novo. Região fora da tabela está cheia.
+#define STOCK_SLOTS 8192 // potência de 2; fica no máximo meio cheia (4096 regiões)
+typedef struct {
+    int16_t rx, ry; // região (célula / REGION_SIZE): até 2048, cabe em int16
+    uint8_t used, stock;
+} stock_cell_t;
+
 static struct {
-    uint8_t *tiles;
-    uint32_t seed, checksum, tick, rng;
+    uint32_t seed, tick, rng;
+    uint32_t probe_sum[PROBE_COUNT]; // checksum das regiões de teste, para o cliente conferir
     game_send_fn send;
     player_t players[MAX_PLAYERS];
     school_t schools[MAX_SCHOOLS];
     shot_t shots[MAX_SHOTS];
     drop_t drops[MAX_DROPS];
     profile_t profiles[MAX_PROFILES];
-    uint32_t pressure[FISH_COUNT];
+    market_t port_market; // balcão 0; a vila v é o balcão 1 + v
     safe_zone_t safe_zones[SAFE_ZONE_COUNT];
-    uint8_t stock[REGIONS_X * REGIONS_Y]; // peixes em cada região (0 a STOCK_MAX)
-    village_t villages[VILLAGE_COUNT];
-    int village_count; // quantas couberam no mapa (normalmente todas)
+    stock_cell_t stock[STOCK_SLOTS]; // só as regiões pescadas (ver stock_find)
+    int stock_used;
+    structure_t structures[STRUCT_SLOTS]; // o que tem em cada região já vista (ver struct_resolve)
+    int struct_used;
+    village_t villages[MAX_VILLAGES]; // as vilas já descobertas, na ordem em que apareceram
+    int village_count;
     uint32_t catalog_ends; // tick em que os mascates trocam o catálogo
     predator_t predators[MAX_PREDATORS];
     uint32_t next_shark; // tick em que pode nascer outro tubarão
@@ -330,22 +387,48 @@ static uint32_t rnd(void) {
 static uint32_t rnd_below(uint32_t n) { return rnd() % n; }
 static int chance_permille(uint32_t pm) { return rnd_below(1000) < pm; }
 
-static tile_t tile(int32_t x, int32_t y) {
-    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return TILE_MOUNTAIN;
-    return (tile_t)g.tiles[y * MAP_W + x];
+static tile_t tile(int32_t x, int32_t y) { return chunks_tile(x, y); }
+
+// Procura a região (rx, ry) na tabela de estoque (hash com sondagem linear).
+// Se não achar e `create` for 1, entra com o estoque cheio. Devolve NULL se
+// não achou (e não criou) ou se a tabela já está meio cheia: aí a região fica
+// cheia para sempre até a próxima limpeza, o que só acontece com milhares de
+// regiões pescadas ao mesmo tempo.
+static stock_cell_t *stock_slot(int rx, int ry, int create) {
+    for (uint32_t i = world_hash(rx, ry, 0x570C) & (STOCK_SLOTS - 1);; i = (i + 1) & (STOCK_SLOTS - 1)) {
+        stock_cell_t *c = &g.stock[i];
+        if (!c->used) {
+            if (!create || g.stock_used >= STOCK_SLOTS / 2) return NULL;
+            *c = (stock_cell_t){(int16_t)rx, (int16_t)ry, 1, STOCK_MAX};
+            g.stock_used++;
+            return c;
+        }
+        if (c->rx == rx && c->ry == ry) return c;
+    }
 }
 
-// Estoque da região onde fica a célula (x, y).
-static uint8_t *stock_at(int x, int y) {
+// A região da célula (x, y) na tabela.
+static stock_cell_t *stock_find(int x, int y, int create) {
     x = x < 0 ? 0 : x >= MAP_W ? MAP_W - 1 : x;
     y = y < 0 ? 0 : y >= MAP_H ? MAP_H - 1 : y;
-    return &g.stock[(y / REGION_SIZE) * REGIONS_X + x / REGION_SIZE];
+    return stock_slot(x / REGION_SIZE, y / REGION_SIZE, create);
+}
+
+// Estoque da região onde fica a célula (x, y): fora da tabela = cheia.
+static int stock_get(int x, int y) {
+    const stock_cell_t *c = stock_find(x, y, 0);
+    return c ? c->stock : STOCK_MAX;
 }
 
 // Chance de pescar (por mil) ajustada pelo estoque: região cheia = chance
 // inteira, região pela metade = metade da chance, região vazia = nada.
 static uint32_t with_stock(uint32_t permille, int x, int y) {
-    return permille * *stock_at(x, y) / STOCK_MAX;
+    return permille * (uint32_t)stock_get(x, y) / STOCK_MAX;
+}
+
+// Bioma da região onde fica a célula (x, y).
+static biome_t biome_at(int x, int y) {
+    return world_region_biome(world_region_of(x), world_region_of(y), g.seed);
 }
 
 static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
@@ -369,14 +452,38 @@ static int at_dock(const player_t *p) {
     return p->x >= DOCK_X - 1 && p->x <= DOCK_X + 1 && p->y >= DOCK_Y - 1 && p->y <= DOCK_Y + 1;
 }
 
+// Distância² em 64 bits: no mundo de 65536 células, dx² + dy² passa de 32 bits.
+static int64_t dist2(int dx, int dy) { return (int64_t)dx * dx + (int64_t)dy * dy; }
+
+// Na seção "estruturas", mais abaixo.
+static const structure_t *struct_get(int rx, int ry);
+static void struct_resolve_near(int x, int y);
+
+// Estrutura do tipo `kind` a até `reach` células (num quadrado) de (x, y).
+// Olha só as 3x3 regiões em volta, e só as já descobertas: perto dos barcos
+// elas sempre estão.
+static const structure_t *struct_near(int x, int y, int kind, int reach) {
+    int rx0 = world_region_of(x), ry0 = world_region_of(y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) {
+            const structure_t *s = struct_get(rx, ry);
+            if (s && s->kind == kind && s->x >= x - reach && s->x <= x + reach && s->y >= y - reach && s->y <= y + reach)
+                return s;
+        }
+    return 0;
+}
+
 static int in_safe_zone(int x, int y) {
     for (int i = 0; i < SAFE_ZONE_COUNT; i++) {
         const safe_zone_t *z = &g.safe_zones[i];
-        if (z->r <= 0) continue; // vila (ou forte) que não coube no mapa
+        if (z->r <= 0) continue; // forte que não coube no mapa
         int dx = x - z->x, dy = y - z->y;
-        if (dx * dx + dy * dy <= z->r * z->r) return 1;
+        if (dist2(dx, dy) <= z->r * z->r) return 1;
     }
-    return 0;
+    const structure_t *s = struct_near(x, y, STRUCT_VILLAGE, VILLAGE_SAFE_R);
+    if (s && dist2(x - s->x, y - s->y) <= VILLAGE_SAFE_R * VILLAGE_SAFE_R) return 1;
+    s = struct_near(x, y, STRUCT_MERMAID, MERMAID_SAFE_R);
+    return s && dist2(x - s->x, y - s->y) <= MERMAID_SAFE_R * MERMAID_SAFE_R;
 }
 
 // Índice da vila em cujo cais o barco está, ou -1.
@@ -398,11 +505,7 @@ static int at_armory(const player_t *p) {
     return z->r > 0 && p->x >= z->x - 1 && p->x <= z->x + 1 && p->y >= z->y - 1 && p->y <= z->y + 1;
 }
 
-static int near_mermaid(const player_t *p) {
-    const safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
-    return p->x >= z->x - MERMAID_REACH && p->x <= z->x + MERMAID_REACH && p->y >= z->y - MERMAID_REACH &&
-           p->y <= z->y + MERMAID_REACH;
-}
+static int near_mermaid(const player_t *p) { return struct_near(p->x, p->y, STRUCT_MERMAID, MERMAID_REACH) != 0; }
 
 // Raiz quadrada inteira (arredonda para baixo).
 static uint32_t isqrt(uint32_t n) {
@@ -424,17 +527,167 @@ static int iabs(int v) { return v < 0 ? -v : v; }
 
 static int far_from(int x, int y, int ox, int oy, int dist) {
     int dx = x - ox, dy = y - oy;
-    return dx * dx + dy * dy >= dist * dist;
+    return dist2(dx, dy) >= (int64_t)dist * dist;
+}
+
+// O mundo é enorme, mas só tem vida perto dos barcos. Cada barco tem uma
+// "bolha" em volta (SPAWN_RANGE para cada lado), e o servidor mantém nela
+// cardumes e tubarões conforme o bioma (BIOME_SCHOOL_PCT e BIOME_SHARKS).
+// O que já está na bolha conta para todos os barcos que estão ali: barcos
+// juntos dividem os bichos em vez de encher o mar. Assim só a parte perto
+// dos barcos vira chunk.
+#define SPAWN_RANGE 256
+#define SCHOOLS_PER_BOAT 30 // no bioma "normal" (100%); a tabela abaixo muda por bioma
+// Tubarão e cardume que ficam mais longe que isso de todos os barcos somem,
+// e a vaga volta a nascer perto de alguém.
+#define DESPAWN_RANGE 512
+
+// Uma célula a até SPAWN_RANGE de (cx, cy), fora da tela de quem está lá
+// (VIEW_RADIUS), para nada aparecer do nada na frente de ninguém.
+static void cell_near(int cx, int cy, int *x, int *y) {
+    int dx, dy;
+    do { // sorteia de novo enquanto cair dentro da tela (cai lá 1 vez em 7, mais ou menos)
+        dx = (int)rnd_below(2 * SPAWN_RANGE + 1) - SPAWN_RANGE;
+        dy = (int)rnd_below(2 * SPAWN_RANGE + 1) - SPAWN_RANGE;
+    } while (iabs(dx) <= VIEW_RADIUS && iabs(dy) <= VIEW_RADIUS);
+    *x = cx + dx, *y = cy + dy;
+}
+
+// Perto de um barco sorteado entre os que estão jogando (sem ninguém, perto
+// do porto). Para eventos e bosses, que são um só no mar todo.
+static void random_cell(int *x, int *y) {
+    int cx = PORT_X, cy = PORT_Y, online[MAX_PLAYERS], n = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) online[n++] = i;
+    if (n) {
+        const player_t *p = &g.players[online[rnd_below((uint32_t)n)]];
+        cx = p->x, cy = p->y;
+    }
+    cell_near(cx, cy, x, y);
+}
+
+// Quanto cada bioma tem de vida, olhando o bioma onde o barco está:
+// cardumes em % de SCHOOLS_PER_BOAT, e tubarões por bolha.
+static const uint8_t BIOME_SCHOOL_PCT[BIOME_COUNT] = {
+    [BIOME_BAY] = 90, [BIOME_MANGROVE] = 110, [BIOME_ISLANDS] = 100,
+    [BIOME_OPEN] = 80, [BIOME_REEF] = 120, [BIOME_ABYSS] = 50,
+};
+static const uint8_t BIOME_SHARKS[BIOME_COUNT] = {
+    [BIOME_BAY] = 2, [BIOME_MANGROVE] = 3, [BIOME_ISLANDS] = 4,
+    [BIOME_OPEN] = 6, [BIOME_REEF] = 5, [BIOME_ABYSS] = 8,
+};
+
+// (x, y) está na bolha do barco?
+static int in_bubble(const player_t *p, int x, int y) {
+    return iabs(x - p->x) <= SPAWN_RANGE && iabs(y - p->y) <= SPAWN_RANGE;
+}
+
+// Longe de todos os barcos? Sem ninguém jogando, nada está longe (nada some).
+static int far_from_boats(int x, int y) {
+    int any = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        const player_t *p = &g.players[i];
+        if (p->state != SLOT_PLAYING) continue;
+        if (!far_from(x, y, p->x, p->y, DESPAWN_RANGE)) return 0;
+        any = 1;
+    }
+    return any;
 }
 
 // Célula onde o tiro está (arredonda para a mais perto).
 static int shot_cell(int32_t v) { return (v + SUB / 2) / SUB; }
 
-static uint32_t price_cents(int sp) {
-    uint32_t base = SPECIES[sp].price_cents;
-    uint32_t p = (uint32_t)((uint64_t)base * MARKET_SATURATION / (MARKET_SATURATION + g.pressure[sp]));
+// --- mercado ----------------------------------------------------------------
+
+// Balcão `id`: 0 é o porto, 1 + v é a vila v.
+static market_t *market_get(int id) { return id == 0 ? &g.port_market : &g.villages[id - 1].market; }
+static int market_count(void) { return 1 + g.village_count; }
+
+static void market_pos(int id, int *x, int *y) {
+    if (id == 0) *x = DOCK_X, *y = DOCK_Y;
+    else *x = g.villages[id - 1].x, *y = g.villages[id - 1].y;
+}
+
+static int clamp_int(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Distância "em quadrado": o maior entre |dx| e |dy|.
+static int cheb(int dx, int dy) { return iabs(dx) > iabs(dy) ? iabs(dx) : iabs(dy); }
+
+// Procura inicial: pelo bioma de onde o balcão fica, mais um tanto da semente
+// (dois balcões no mesmo bioma não pagam igual).
+static void market_init(market_t *m, int x, int y, biome_t biome) {
+    *m = (market_t){0};
+    for (int sp = 0; sp < FISH_COUNT; sp++) {
+        uint16_t pct = fish_biome_pct(sp, biome);
+        int d = 100 + (pct > 100 ? -DEMAND_BIOME : pct < 100 ? DEMAND_BIOME : 0);
+        d += (int)(world_hash(x, y + sp, g.seed ^ 0xDE3A0) % (2 * DEMAND_NOISE + 1)) - DEMAND_NOISE;
+        m->base[sp] = m->demand[sp] = (uint8_t)clamp_int(d, DEMAND_MIN, DEMAND_MAX);
+    }
+}
+
+static uint32_t price_cents(const market_t *m, int sp) {
+    uint32_t base = (uint32_t)SPECIES[sp].price_cents * m->demand[sp] / 100;
+    uint32_t p = (uint32_t)((uint64_t)base * MARKET_SATURATION / (MARKET_SATURATION + m->pressure[sp]));
     uint32_t min = base * MARKET_MIN_PCT / 100;
     return p < min ? min : p;
+}
+
+// Balcão mais perto do barco (distância de Chebyshev). No cais de um balcão,
+// é ele mesmo.
+static int market_near(const player_t *p) {
+    int best = 0, best_d = INT32_MAX;
+    for (int id = 0; id < market_count(); id++) {
+        int x, y;
+        market_pos(id, &x, &y);
+        int d = cheb(p->x - x, p->y - y);
+        if (d < best_d) best_d = d, best = id;
+    }
+    return best;
+}
+
+// Vender: a pressão sobe no balcão.
+static void market_sold(market_t *m, int sp, uint32_t count) { m->pressure[sp] += count * 1000; }
+
+// A pressão escorre do balcão mais pressionado para o menos, entre vizinhos.
+// O que sai de um entra no outro, então a soma não muda (só o decaimento tira).
+static void market_diffuse(void) {
+    int n = market_count();
+    for (int a = 0; a < n; a++) {
+        int ax, ay;
+        market_pos(a, &ax, &ay);
+        for (int b = a + 1; b < n; b++) {
+            int bx, by;
+            market_pos(b, &bx, &by);
+            int d = cheb(ax - bx, ay - by);
+            if (d >= DIFFUSE_RANGE) continue;
+            market_t *ma = market_get(a), *mb = market_get(b);
+            for (int sp = 0; sp < FISH_COUNT; sp++) {
+                int64_t diff = (int64_t)ma->pressure[sp] - mb->pressure[sp];
+                int64_t flow = diff * DIFFUSE_PCT * (DIFFUSE_RANGE - d) / (100 * DIFFUSE_RANGE);
+                ma->pressure[sp] = (uint32_t)(ma->pressure[sp] - flow);
+                mb->pressure[sp] = (uint32_t)(mb->pressure[sp] + flow);
+            }
+        }
+    }
+}
+
+// A procura de cada balcão anda um pouco, sem sair de perto da inicial.
+static void market_drift(void) {
+    for (int id = 0; id < market_count(); id++) {
+        market_t *m = market_get(id);
+        for (int sp = 0; sp < FISH_COUNT; sp++) {
+            int d = m->demand[sp] + (int)rnd_below(2 * DEMAND_DRIFT + 1) - DEMAND_DRIFT;
+            d = clamp_int(d, m->base[sp] - DEMAND_DRIFT_MAX, m->base[sp] + DEMAND_DRIFT_MAX);
+            m->demand[sp] = (uint8_t)clamp_int(d, DEMAND_MIN, DEMAND_MAX);
+        }
+    }
+}
+
+static void market_decay(void) {
+    for (int id = 0; id < market_count(); id++) {
+        market_t *m = market_get(id);
+        for (int sp = 0; sp < FISH_COUNT; sp++) m->pressure[sp] = m->pressure[sp] * 99 / 100;
+    }
 }
 
 static int same_name(const char *a, const char *b) {
@@ -481,22 +734,43 @@ static void write_player_info(writer_t *w, int id) {
     put_name(w, prof(&g.players[id])->name);
 }
 
+// Preços do balcão mais perto do barco. Cada um recebe os seus.
 static void send_prices(int slot) {
+    if (slot < 0) {
+        for (int i = 0; i < MAX_PLAYERS; i++)
+            if (g.players[i].state == SLOT_PLAYING) send_prices(i);
+        return;
+    }
+    player_t *p = &g.players[slot];
+    int id = market_near(p);
+    const market_t *m = market_get(id);
+    p->market = (int16_t)id;
     writer_t w = writer(out, sizeof out);
     put_u8(&w, S_PRICES);
-    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, (uint16_t)price_cents(i));
-    slot < 0 ? send_all(&w) : send_w(slot, &w);
+    put_u8(&w, (uint8_t)id);
+    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, (uint16_t)price_cents(m, i));
+    send_w(slot, &w);
 }
 
-static void send_marks(int slot) {
+// Pontos do minimapa de um barco. Cardumes só até MARK_RANGE dele (o mapa
+// grande mostra 2048 células), e no máximo MARK_SCHOOLS_MAX, para caber no
+// buffer junto com bags, coroas e lugares.
+#define MARK_RANGE 1024
+#define MARK_SCHOOLS_MAX 120
+
+static int near(int x, int y, int ox, int oy, int extra); // na tela do barco (mais abaixo)
+
+static void send_marks_to(int slot) {
+    const player_t *p = &g.players[slot];
     writer_t w = writer(out, sizeof out);
     put_u8(&w, S_MARKS);
     size_t count_at = w.len;
     put_u8(&w, 0);
-    uint8_t n = 0;
-    for (int i = 0; i < MAX_SCHOOLS; i++) {
+    uint8_t n = 0, schools = 0;
+    for (int i = 0; i < MAX_SCHOOLS && schools < MARK_SCHOOLS_MAX; i++) {
         const school_t *s = &g.schools[i];
-        if (!s->alive) continue;
+        if (!s->alive || iabs(s->x - p->x) > MARK_RANGE || iabs(s->y - p->y) > MARK_RANGE) continue;
+        schools++;
         put_u16(&w, s->x);
         put_u16(&w, s->y);
         put_u8(&w, MARK_SCHOOL);
@@ -512,28 +786,60 @@ static void send_marks(int slot) {
         put_u8(&w, 0);
         n++;
     }
-    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].x);
-    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].y);
-    put_u8(&w, MARK_MERMAID);
-    put_u8(&w, 0);
-    n++;
+    // Forte, vilas e sereia só aparecem quando estão na tela do barco: o
+    // resto do mapa o jogador descobre navegando.
     const safe_zone_t *armory = &g.safe_zones[ZONE_ARMORY];
-    if (armory->r > 0) {
+    if (armory->r > 0 && near(armory->x, armory->y, p->x, p->y, 0)) {
         put_u16(&w, (uint16_t)armory->x);
         put_u16(&w, (uint16_t)armory->y);
         put_u8(&w, MARK_ARMORY);
         put_u8(&w, 0);
         n++;
     }
-    for (int i = 0; i < g.village_count; i++) {
-        put_u16(&w, (uint16_t)g.villages[i].x);
-        put_u16(&w, (uint16_t)g.villages[i].y);
-        put_u8(&w, MARK_VILLAGE);
-        put_u8(&w, g.villages[i].fav);
-        n++;
-    }
+    int rx0 = world_region_of(p->x), ry0 = world_region_of(p->y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) {
+            const structure_t *st = struct_get(rx, ry);
+            if (!st || st->kind == STRUCT_NONE || !near(st->x, st->y, p->x, p->y, 0)) continue;
+            put_u16(&w, (uint16_t)st->x);
+            put_u16(&w, (uint16_t)st->y);
+            put_u8(&w, st->kind == STRUCT_VILLAGE ? MARK_VILLAGE : MARK_MERMAID);
+            put_u8(&w, st->kind == STRUCT_VILLAGE ? g.villages[st->village].fav : 0);
+            n++;
+        }
     out[count_at] = n;
-    slot < 0 ? send_all(&w) : send_w(slot, &w);
+    send_w(slot, &w);
+}
+
+// slot < 0: para todo mundo (cada um recebe os pontos perto dele).
+static void send_marks(int slot) {
+    if (slot >= 0) { send_marks_to(slot); return; }
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_marks_to(i);
+}
+
+// Os waypoints do jogador: só ele recebe.
+static void send_waypoints(int slot) {
+    const profile_t *pr = prof(&g.players[slot]);
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_WAYPOINTS);
+    put_u8(&w, WAYPOINT_COUNT);
+    for (int i = 0; i < WAYPOINT_COUNT; i++) {
+        put_u16(&w, pr->waypoint[i][0]);
+        put_u16(&w, pr->waypoint[i][1]);
+    }
+    send_w(slot, &w);
+}
+
+// Marca (ou apaga, com x = y = 0) o waypoint `index`. Qualquer ponto do mapa
+// vale: é só uma anotação do jogador, o servidor só guarda.
+static void set_waypoint(int slot, uint8_t index, int x, int y) {
+    if (index >= WAYPOINT_COUNT) return;
+    profile_t *pr = prof(&g.players[slot]);
+    pr->waypoint[index][0] = (uint16_t)x;
+    pr->waypoint[index][1] = (uint16_t)y;
+    storage_save(g.players[slot].profile, pr);
+    send_waypoints(slot);
 }
 
 // Em que slot do barco o item da bolsa está (0 = não está equipado).
@@ -640,7 +946,7 @@ static int visible(int x, int y, const player_t *p) {
     if (!near(x, y, p->x, p->y, 0)) return 0;
     if (g.weather.kind != WEATHER_FOG) return 1;
     int dx = x - p->x, dy = y - p->y;
-    return dx * dx + dy * dy <= FOG_VIEW * FOG_VIEW;
+    return dist2(dx, dy) <= FOG_VIEW * FOG_VIEW;
 }
 
 static int is_mad(const player_t *p); // na seção dos bosses
@@ -713,7 +1019,7 @@ static void send_state(int slot) {
     out[count_at] = n;
 
     // Desde a v7: estoque de peixe da região, bichos por perto e o evento do mundo.
-    put_u8(&w, (uint8_t)(*stock_at(p->x, p->y) * 100 / STOCK_MAX));
+    put_u8(&w, (uint8_t)(stock_get(p->x, p->y) * 100 / STOCK_MAX));
     count_at = w.len;
     put_u8(&w, 0);
     n = 0;
@@ -854,11 +1160,12 @@ static void add_fish(int slot, uint8_t species, int n) {
         return;
     }
     // Não dá para pescar mais peixe do que a região tem.
-    uint8_t *stock = stock_at(p->x, p->y);
+    stock_cell_t *c = stock_find(p->x, p->y, 1);
+    int stock = c ? c->stock : STOCK_MAX;
     int got = n < room ? n : room;
-    if (got > *stock) got = *stock;
+    if (got > stock) got = stock;
     if (got <= 0) return;
-    *stock = (uint8_t)(*stock - got);
+    if (c) c->stock = (uint8_t)(stock - got);
     prof(p)->hold[species] += got;
     send_event(slot, EV_CATCH, species, (uint16_t)got, 0);
     int luck = p->stats[STAT_LUCK] > 0 ? p->stats[STAT_LUCK] : 0;
@@ -871,15 +1178,16 @@ static void sell(int slot, uint8_t species) {
     profile_t *pr = prof(p);
     int v = at_village(p);
     uint8_t fav = v >= 0 ? g.villages[v].fav : FISH_NONE;
+    market_t *m = market_get(v >= 0 ? 1 + v : 0);
     uint32_t total = 0, count = 0;
     for (int i = 0; i < FISH_COUNT; i++) {
         if (species != FISH_NONE && species != i) continue;
         uint32_t n = pr->hold[i];
         if (!n) continue;
-        uint32_t price = price_cents(i);
+        uint32_t price = price_cents(m, i);
         if (i == fav) price = price * (100 + VILLAGE_BONUS_PCT) / 100;
         total += price * n;
-        g.pressure[i] += n * 1000;
+        market_sold(m, i, n);
         count += n;
         pr->hold[i] = 0;
     }
@@ -1186,9 +1494,9 @@ static void deliver(int slot) {
     uint8_t sp = v->quest_species, bit = (uint8_t)(1 << (p->profile % 8));
     if (v->quest_done[p->profile / 8] & bit) { send_event(slot, EV_QUEST_WAIT, sp, 0, 0); return; }
     if (pr->hold[sp] < v->quest_count) { send_event(slot, EV_QUEST_MISSING, sp, v->quest_count, pr->hold[sp]); return; }
-    uint32_t pay = price_cents(sp) * v->quest_count * QUEST_PAY_PCT / 100;
+    uint32_t pay = price_cents(&v->market, sp) * v->quest_count * QUEST_PAY_PCT / 100;
     pr->hold[sp] -= v->quest_count;
-    g.pressure[sp] += (uint32_t)v->quest_count * 1000;
+    market_sold(&v->market, sp, v->quest_count);
     pr->money += pay;
     v->quest_done[p->profile / 8] |= bit;
     storage_save(p->profile, pr);
@@ -1481,14 +1789,16 @@ static int pred_step(predator_t *pd, int dx, int dy) {
     return 0;
 }
 
-static void spawn_shark(void) {
+// Um tubarão novo na bolha do barco p.
+static void spawn_shark(const player_t *p) {
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (pd->alive) continue;
         for (int tries = 0; tries < 200; tries++) {
-            int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+            int x, y;
+            cell_near(p->x, p->y, &x, &y);
             if (tile(x, y) != TILE_DEEP || !far_from(x, y, PORT_X, PORT_Y, 50) || in_safe_zone(x, y)) continue;
-            *pd = (predator_t){.alive = 1, .kind = PRED_SHARK, .x = (int16_t)x, .y = (int16_t)y, .hp = SHARK_HP,
+            *pd = (predator_t){.alive = 1, .kind = PRED_SHARK, .x = x, .y = y, .hp = SHARK_HP,
                                .target = -1, .heading = (uint8_t)rnd_below(8)};
             return;
         }
@@ -1513,12 +1823,12 @@ static void update_ghost(predator_t *pd) {
             pd->target = -1;
     }
     if (pd->target < 0 && g.tick % TICK_HZ == 0) {
-        int best = GHOST_SENSE * GHOST_SENSE + 1;
+        int64_t best = GHOST_SENSE * GHOST_SENSE + 1;
         for (int t = 0; t < MAX_PLAYERS; t++) {
             const player_t *p = &g.players[t];
             int dx = p->x - pd->x, dy = p->y - pd->y;
-            if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
-                best = dx * dx + dy * dy, pd->target = (int8_t)t;
+            if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dist2(dx, dy) < best)
+                best = dist2(dx, dy), pd->target = (int8_t)t;
         }
     }
     const player_t *prey = pd->target >= 0 ? &g.players[pd->target] : 0;
@@ -1540,14 +1850,14 @@ static void update_ghost(predator_t *pd) {
 }
 
 static void update_predators(void) {
-    int alive = 0;
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (!pd->alive) continue;
         if (pd->bite) pd->bite--;
         if (pd->grabbed) pd->grabbed--;
         if (pd->kind == PRED_GHOST) { update_ghost(pd); continue; }
-        alive++;
+        // Ficou longe de todo mundo: some, e a vaga nasce de novo perto de alguém.
+        if (g.tick % TICK_HZ == 0 && far_from_boats(pd->x, pd->y)) { pd->alive = 0; continue; }
         // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
         if (pd->target >= 0) {
             const player_t *t = &g.players[pd->target];
@@ -1555,11 +1865,11 @@ static void update_predators(void) {
         }
         // Sem presa, procura uma vez por segundo: o barco fraco mais perto.
         if (pd->target < 0 && g.tick % TICK_HZ == 0) {
-            int best = SHARK_SENSE * SHARK_SENSE + 1;
+            int64_t best = SHARK_SENSE * SHARK_SENSE + 1;
             for (int t = 0; t < MAX_PLAYERS; t++) {
                 const player_t *p = &g.players[t];
                 int dx = p->x - pd->x, dy = p->y - pd->y;
-                if (is_prey(p) && dx * dx + dy * dy < best) best = dx * dx + dy * dy, pd->target = (int8_t)t;
+                if (is_prey(p) && dist2(dx, dy) < best) best = dist2(dx, dy), pd->target = (int8_t)t;
             }
         }
         const player_t *prey = pd->target >= 0 ? &g.players[pd->target] : 0;
@@ -1579,9 +1889,20 @@ static void update_predators(void) {
             bite(pd->target, pd);
         }
     }
-    if (alive < SHARK_COUNT && g.tick >= g.next_shark) {
-        spawn_shark();
+    // A cada SHARK_RESPAWN, cada barco com menos tubarões na bolha do que o
+    // bioma dele pede (BIOME_SHARKS) ganha mais um.
+    if (g.tick >= g.next_shark) {
         g.next_shark = g.tick + SHARK_RESPAWN;
+        for (int t = 0; t < MAX_PLAYERS; t++) {
+            const player_t *p = &g.players[t];
+            if (p->state != SLOT_PLAYING) continue;
+            int n = 0;
+            for (int i = 0; i < MAX_PREDATORS; i++) {
+                const predator_t *pd = &g.predators[i];
+                n += pd->alive && pd->kind == PRED_SHARK && in_bubble(p, pd->x, pd->y);
+            }
+            if (n < BIOME_SHARKS[biome_at(p->x, p->y)]) spawn_shark(p);
+        }
     }
 }
 
@@ -1595,24 +1916,25 @@ static void event_all(uint8_t kind, uint8_t species, uint16_t count, uint32_t va
 // A célula está dentro do evento `kind`? Zona segura nunca está.
 // Catálogo novo nos mascates de todas as vilas: épicos de qualquer tipo
 // (menos as armas dos bosses), com encanto +1 ou +2.
-static void new_catalog(void) {
-    for (int i = 0; i < g.village_count; i++) {
-        village_t *v = &g.villages[i];
-        for (int k = 0; k < PEDDLER_ITEMS; k++) {
-            uint8_t base = (uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1));
-            v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
-            v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
-        }
-        // Encomenda: uma espécie que não está saturada no mercado.
-        uint8_t fresh[FISH_COUNT], n = 0;
-        for (int sp = 0; sp < FISH_COUNT; sp++)
-            if (price_cents(sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
-        uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
-        int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
-        v->quest_species = sp;
-        v->quest_count = (uint8_t)(count < QUEST_MIN ? QUEST_MIN : count > QUEST_MAX ? QUEST_MAX : count);
-        memset(v->quest_done, 0, sizeof v->quest_done);
+static void new_village_catalog(village_t *v) {
+    for (int k = 0; k < PEDDLER_ITEMS; k++) {
+        uint8_t base = (uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1));
+        v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
+        v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
     }
+    // Encomenda: uma espécie que não está saturada no balcão da vila.
+    uint8_t fresh[FISH_COUNT], n = 0;
+    for (int sp = 0; sp < FISH_COUNT; sp++)
+        if (price_cents(&v->market, sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
+    uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
+    int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
+    v->quest_species = sp;
+    v->quest_count = (uint8_t)(count < QUEST_MIN ? QUEST_MIN : count > QUEST_MAX ? QUEST_MAX : count);
+    memset(v->quest_done, 0, sizeof v->quest_done);
+}
+
+static void new_catalog(void) {
+    for (int i = 0; i < g.village_count; i++) new_village_catalog(&g.villages[i]);
     g.catalog_ends = g.tick + CATALOG_TIME;
 }
 
@@ -1626,13 +1948,14 @@ static void update_catalog(void) {
 static int in_event(uint8_t kind, int x, int y) {
     if (g.event.kind != kind || in_safe_zone(x, y)) return 0;
     int dx = x - g.event.x, dy = y - g.event.y;
-    return dx * dx + dy * dy <= g.event.r * g.event.r;
+    return dist2(dx, dy) <= g.event.r * g.event.r;
 }
 
 // Um lugar no mar aberto, longe do porto, com o tile pedido no centro.
 static int event_spot(int deep_only, int *ox, int *oy) {
     for (int tries = 0; tries < 500; tries++) {
-        int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+        int x, y;
+        random_cell(&x, &y);
         tile_t t = tile(x, y);
         if (deep_only ? t != TILE_DEEP : !tile_is_water(t)) continue;
         if (!far_from(x, y, PORT_X, PORT_Y, EVENT_MIN_DIST) || in_safe_zone(x, y)) continue;
@@ -1652,7 +1975,8 @@ static void squid_tide(void) {
         if (!in_event(WORLD_SQUID, x, y) || tile(x, y) != TILE_DEEP) continue;
         g.schools[made++] = (school_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .r = (uint8_t)(3 + rnd_below(3)),
                                        .species = FISH_LULA, .expires = g.event.ends};
-        *stock_at(x, y) = STOCK_MAX;
+        stock_cell_t *c = stock_find(x, y, 0);
+        if (c) c->stock = STOCK_MAX;
     }
     send_marks(-1);
 }
@@ -1662,7 +1986,7 @@ static int spawn_ghost(int x, int y) {
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (pd->alive) continue;
-        *pd = (predator_t){.alive = 1, .kind = PRED_GHOST, .x = (int16_t)x, .y = (int16_t)y, .hp = GHOST_HP,
+        *pd = (predator_t){.alive = 1, .kind = PRED_GHOST, .x = x, .y = y, .hp = GHOST_HP,
                            .target = -1, .heading = (uint8_t)rnd_below(8)};
         memset(g.ghost_dmg, 0, sizeof g.ghost_dmg);
         return i;
@@ -1677,8 +2001,8 @@ static void start_event(uint8_t kind) {
     int dir = (int)rnd_below(8);
     g.event = (world_event_t){
         .kind = kind,
-        .x = (int16_t)x,
-        .y = (int16_t)y,
+        .x = x,
+        .y = y,
         .r = kind == WORLD_STORM ? STORM_R : kind == WORLD_SQUID ? SQUID_R : GHOST_R,
         .dx = DIR_X[dir],
         .dy = DIR_Y[dir],
@@ -1729,8 +2053,8 @@ static void update_world(void) {
         int nx = g.event.x + g.event.dx, ny = g.event.y + g.event.dy;
         if (nx < 0 || nx >= MAP_W) g.event.dx = (int8_t)-g.event.dx, nx = g.event.x;
         if (ny < 0 || ny >= MAP_H) g.event.dy = (int8_t)-g.event.dy, ny = g.event.y;
-        g.event.x = (int16_t)nx;
-        g.event.y = (int16_t)ny;
+        g.event.x = nx;
+        g.event.y = ny;
     }
 }
 
@@ -1740,7 +2064,7 @@ static void storm(int slot) {
     player_t *p = &g.players[slot];
     if (g.tick % STORM_PUSH_EVERY == 0) {
         int nx = p->x + g.event.dx, ny = p->y + g.event.dy;
-        if (tile_is_sailable(tile(nx, ny))) p->x = (int16_t)nx, p->y = (int16_t)ny;
+        if (tile_is_sailable(tile(nx, ny))) p->x = nx, p->y = ny;
     }
     if (g.tick % STORM_HURT_EVERY == 0 && hp(p) > 0) {
         prof(p)->damage++;
@@ -1811,12 +2135,13 @@ static void boss_hurt(int slot, int dmg) {
 
 // O barco mais perto, fora da zona segura, até `range` células. -1 se nenhum.
 static int boss_nearest(int range) {
-    int best = range * range + 1, found = -1;
+    int64_t best = (int64_t)range * range + 1;
+    int found = -1;
     for (int t = 0; t < MAX_PLAYERS; t++) {
         const player_t *p = &g.players[t];
         int dx = p->x - g.boss.x, dy = p->y - g.boss.y;
-        if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
-            best = dx * dx + dy * dy, found = t;
+        if (p->state == SLOT_PLAYING && !in_safe_zone(p->x, p->y) && dist2(dx, dy) < best)
+            best = dist2(dx, dy), found = t;
     }
     return found;
 }
@@ -1856,12 +2181,13 @@ static void update_kraken(void) {
     b->rest = KRAKEN_EVERY;
     uint8_t taken[MAX_PLAYERS] = {0};
     for (int arm = 0; arm < KRAKEN_ARMS; arm++) {
-        int best = KRAKEN_REACH * KRAKEN_REACH + 1, slot = -1;
+        int64_t best = KRAKEN_REACH * KRAKEN_REACH + 1;
+        int slot = -1;
         for (int t = 0; t < MAX_PLAYERS; t++) {
             const player_t *p = &g.players[t];
             int dx = p->x - b->x, dy = p->y - b->y;
-            if (p->state == SLOT_PLAYING && !taken[t] && !in_safe_zone(p->x, p->y) && dx * dx + dy * dy < best)
-                best = dx * dx + dy * dy, slot = t;
+            if (p->state == SLOT_PLAYING && !taken[t] && !in_safe_zone(p->x, p->y) && dist2(dx, dy) < best)
+                best = dist2(dx, dy), slot = t;
         }
         if (slot < 0) break;
         taken[slot] = 1;
@@ -1870,7 +2196,7 @@ static void update_kraken(void) {
         for (int i = 0; i < KRAKEN_PULL; i++) {
             int nx = p->x + ((b->x > p->x) - (b->x < p->x)), ny = p->y + ((b->y > p->y) - (b->y < p->y));
             if (iabs(nx - b->x) <= 1 && iabs(ny - b->y) <= 1) break; // já está colado nele
-            if (tile_is_sailable(tile(nx, ny))) p->x = (int16_t)nx, p->y = (int16_t)ny;
+            if (tile_is_sailable(tile(nx, ny))) p->x = nx, p->y = ny;
         }
         p->grabbed = GRAB_TICKS;
         p->vel = 0;
@@ -1913,7 +2239,8 @@ static uint8_t pick_boss(void) {
 // Lugar para o boss nascer: água do tipo que ele gosta, longe do porto.
 static int boss_spot(int *ox, int *oy) {
     for (int tries = 0; tries < 1000; tries++) {
-        int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+        int x, y;
+        random_cell(&x, &y);
         if (!boss_water(x, y) || !far_from(x, y, PORT_X, PORT_Y, BOSS_MIN_DIST)) continue;
         *ox = x, *oy = y;
         return 1;
@@ -1930,8 +2257,8 @@ static void start_boss(uint8_t kind) {
     int x, y;
     if (!boss_spot(&x, &y)) { g.boss.kind = BOSS_NONE; return; }
     const boss_info_t *info = &BOSSES[kind];
-    g.boss.x = (int16_t)x;
-    g.boss.y = (int16_t)y;
+    g.boss.x = x;
+    g.boss.y = y;
     g.boss.hp = g.boss.hp_max = (int16_t)(info->hp_base + info->hp_per_player * online);
     g.boss.heading = (uint8_t)rnd_below(8);
     g.boss.ends = g.tick + BOSS_TIME;
@@ -1986,7 +2313,7 @@ static int hit_boss(const shot_t *sh, int cx, int cy) {
     boss_t *b = &g.boss;
     if (!b->kind || b->hp <= 0) return 0;
     int r = BOSSES[b->kind].r, dx = cx - b->x, dy = cy - b->y;
-    if (dx * dx + dy * dy > r * r) return 0;
+    if (dist2(dx, dy) > r * r) return 0;
     int shooter = g.players[sh->owner].state == SLOT_PLAYING ? sh->owner : -1;
     int dmg = sh->damage < b->hp ? sh->damage : b->hp;
     b->hp = (int16_t)(b->hp - dmg);
@@ -2047,8 +2374,9 @@ static void update_player(int slot) {
     if (p->vel == 0) p->move_budget = 0;
     int in_storm = in_event(WORLD_STORM, p->x, p->y);
     if (in_storm) storm(slot);
-    prof(p)->x = p->x;
-    prof(p)->y = p->y;
+    prof(p)->x = (uint16_t)p->x;
+    prof(p)->y = (uint16_t)p->y;
+    prof(p)->map_version = MAP_VERSION;
     pick_up(slot);
 
     // Produção = % a mais na chance de pescar. +50 de produção: 6% vira 9%.
@@ -2058,40 +2386,52 @@ static void update_player(int slot) {
     if (in_storm) passive = passive * STORM_CATCH_PCT / 100, school = school * STORM_CATCH_PCT / 100;
     if (g.weather.kind == WEATHER_RAIN) passive = passive * RAIN_CATCH_PCT / 100, school = school * RAIN_CATCH_PCT / 100;
     if (moved && chance_permille(with_stock(passive, p->x, p->y))) {
-        uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
+        uint8_t sp = fish_roll(tile(p->x, p->y), biome_at(p->x, p->y), rnd());
         if (sp != FISH_NONE) add_fish(slot, sp, 1);
     }
     for (int i = 0; i < MAX_SCHOOLS; i++) {
         const school_t *s = &g.schools[i];
         int dx = p->x - s->x, dy = p->y - s->y;
-        if (s->alive && dx * dx + dy * dy <= s->r * s->r && chance_permille(with_stock(school, p->x, p->y)))
+        if (s->alive && dist2(dx, dy) <= s->r * s->r && chance_permille(with_stock(school, p->x, p->y)))
             add_fish(slot, s->species, 1 + (int)rnd_below(3));
     }
 }
 
 static void update_schools(void) {
-    int attempts = 2000;
     for (int i = 0; i < MAX_SCHOOLS; i++) {
         school_t *s = &g.schools[i];
         // O cardume vai embora no fim da vida ou quando a região fica sem peixe.
-        if (s->alive && (s->expires <= g.tick || *stock_at(s->x, s->y) < SCHOOL_MIN_STOCK)) s->alive = 0;
-        // Nada de cardume colado no porto: precisa sair para buscar. E ele
-        // nasce mais onde tem mais peixe: numa região com 40% do estoque, só
-        // 40% das tentativas valem.
-        while (!s->alive && attempts-- > 0) {
-            int x = (int)rnd_below(MAP_W), y = (int)rnd_below(MAP_H);
+        // Também some quando fica longe de todos os barcos, para nascer perto de alguém.
+        if (s->alive && (s->expires <= g.tick || stock_get(s->x, s->y) < SCHOOL_MIN_STOCK)) s->alive = 0;
+        if (s->alive && g.tick % TICK_HZ == 0 && far_from_boats(s->x, s->y)) s->alive = 0;
+    }
+    // Completa a bolha de cada barco até a meta do bioma dele. Nada de cardume
+    // colado no porto: precisa sair para buscar. E ele nasce mais onde tem
+    // mais peixe: numa região com 40% do estoque, só 40% das tentativas valem.
+    int free_i = 0;
+    for (int t = 0; t < MAX_PLAYERS; t++) {
+        const player_t *p = &g.players[t];
+        if (p->state != SLOT_PLAYING) continue;
+        int have = 0, want = SCHOOLS_PER_BOAT * BIOME_SCHOOL_PCT[biome_at(p->x, p->y)] / 100;
+        for (int i = 0; i < MAX_SCHOOLS; i++) have += g.schools[i].alive && in_bubble(p, g.schools[i].x, g.schools[i].y);
+        for (int attempts = 300; have < want && attempts > 0; attempts--) {
+            while (free_i < MAX_SCHOOLS && g.schools[free_i].alive) free_i++;
+            if (free_i == MAX_SCHOOLS) break; // sem vaga
+            int x, y;
+            cell_near(p->x, p->y, &x, &y);
             int dx = x - PORT_X, dy = y - PORT_Y;
             tile_t t = tile(x, y);
-            if (!tile_is_water(t) || dx * dx + dy * dy < 30 * 30) continue;
-            if (rnd_below(STOCK_MAX) >= *stock_at(x, y)) continue;
-            *s = (school_t){
+            if (!tile_is_water(t) || dist2(dx, dy) < 30 * 30) continue;
+            if (rnd_below(STOCK_MAX) >= (uint32_t)stock_get(x, y)) continue;
+            g.schools[free_i] = (school_t){
                 .alive = 1,
                 .x = (uint16_t)x,
                 .y = (uint16_t)y,
                 .r = (uint8_t)(2 + rnd_below(4)),
-                .species = fish_roll(t, rnd()),
+                .species = fish_roll(t, biome_at(x, y), rnd()),
                 .expires = g.tick + 600 + rnd_below(1200), // 1 a 3 minutos
             };
+            have++;
         }
     }
     // Cardumes migram devagar.
@@ -2109,12 +2449,20 @@ static void update_schools(void) {
 // Crescimento logístico: devagar com pouco peixe (poucos para se reproduzir),
 // rápido no meio e devagar de novo perto do máximo. O +1 garante que até uma
 // região vazia volta.
+// A tabela é refeita só com as regiões que ainda não encheram: as cheias
+// saem, e assim ela não cresce à toa.
 static void regen_stock(void) {
-    for (int i = 0; i < REGIONS_X * REGIONS_Y; i++) {
-        int s = g.stock[i];
-        if (s >= STOCK_MAX) continue;
+    static stock_cell_t old[STOCK_SLOTS];
+    memcpy(old, g.stock, sizeof old);
+    memset(g.stock, 0, sizeof g.stock);
+    g.stock_used = 0;
+    for (int i = 0; i < STOCK_SLOTS; i++) {
+        if (!old[i].used) continue;
+        int s = old[i].stock;
         s += 1 + s * (STOCK_MAX - s) / STOCK_GROWTH;
-        g.stock[i] = (uint8_t)(s > STOCK_MAX ? STOCK_MAX : s);
+        if (s >= STOCK_MAX) continue;
+        stock_cell_t *c = stock_slot(old[i].rx, old[i].ry, 1);
+        if (c) c->stock = (uint8_t)s;
     }
 }
 
@@ -2193,8 +2541,10 @@ static void join(int slot, const uint8_t *data, size_t len) {
     };
     update_stats(p);
     // Volta para onde parou, se ainda for água; senão nasce perto do porto.
+    // Quem parou num mapa antigo (map_version diferente) volta para o porto:
+    // o (x, y) salvo era de outro mapa.
     const profile_t *pr = &g.profiles[index];
-    if ((pr->x || pr->y) && tile_is_sailable(tile(pr->x, pr->y))) {
+    if (pr->map_version == MAP_VERSION && (pr->x || pr->y) && tile_is_sailable(tile(pr->x, pr->y))) {
         p->x = pr->x;
         p->y = pr->y;
     } else {
@@ -2205,10 +2555,15 @@ static void join(int slot, const uint8_t *data, size_t len) {
     put_u8(&w, S_WELCOME);
     put_u8(&w, (uint8_t)slot);
     put_u32(&w, g.seed);
-    put_u16(&w, MAP_W);
-    put_u16(&w, MAP_H);
-    put_u32(&w, g.checksum);
+    put_u32(&w, MAP_W); // 65536 não cabe num u16
+    put_u32(&w, MAP_H);
     put_u8(&w, TICK_HZ);
+    put_u8(&w, PROBE_COUNT);
+    for (int i = 0; i < PROBE_COUNT; i++) {
+        put_u16(&w, (uint16_t)(PORT_RX + PROBES[i][0]));
+        put_u16(&w, (uint16_t)(PORT_RY + PROBES[i][1]));
+        put_u32(&w, g.probe_sum[i]);
+    }
     send_w(slot, &w);
 
     // Apresenta todo mundo para o novo jogador e o novo jogador para todo mundo.
@@ -2223,33 +2578,14 @@ static void join(int slot, const uint8_t *data, size_t len) {
             send_w(i, &w);
         }
     }
-    send_prices(slot);
+    struct_resolve_near(p->x, p->y);
+    send_prices(slot); // depois de descobrir as vilas em volta: o balcão mais perto pode ser uma delas
     send_marks(slot);
+    send_waypoints(slot);
     send_inventory(slot);
     send_boat(slot);
     send_rank(-1);
     send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
-}
-
-// A pedra da sereia: sempre no mesmo lugar para o mesmo mapa (sai da semente
-// do mapa, não do sorteio do servidor). Água em volta para dar para chegar.
-static void place_mermaid(void) {
-    safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
-    *z = (safe_zone_t){PORT_X + 16, PORT_Y, MERMAID_SAFE_R}; // se não achar lugar
-    for (int i = 0; i < 5000; i++) {
-        uint32_t h = world_hash(i, 0x5E7EA, g.seed);
-        int dx = (int)(h % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
-        int dy = (int)((h >> 16) % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
-        int d2 = dx * dx + dy * dy;
-        if (d2 < MERMAID_MIN_DIST * MERMAID_MIN_DIST || d2 > MERMAID_MAX_DIST * MERMAID_MAX_DIST) continue;
-        int water = 1;
-        for (int y = -2; y <= 2 && water; y++)
-            for (int x = -2; x <= 2 && water; x++) water = tile_is_water(tile(PORT_X + dx + x, PORT_Y + dy + y));
-        if (!water) continue;
-        z->x = (int16_t)(PORT_X + dx);
-        z->y = (int16_t)(PORT_Y + dy);
-        return;
-    }
 }
 
 // Um cais na costa: célula de água com terra colada (a ilha) e pelo menos 5
@@ -2267,27 +2603,87 @@ static int is_coast(int x, int y) {
     return land && water >= 5;
 }
 
-// Vilas: como a sereia, saem da semente do mapa, então ficam sempre no mesmo
-// lugar. O cais fica na costa de uma ilha.
-static void place_villages(void) {
-    g.village_count = 0;
-    for (int i = 0; i < 20000 && g.village_count < VILLAGE_COUNT; i++) {
-        uint32_t h = world_hash(i, 0x7111A, g.seed);
-        int x = (int)(h % MAP_W), y = (int)((h >> 16) % MAP_H);
-        if (!far_from(x, y, PORT_X, PORT_Y, VILLAGE_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, VILLAGE_MAX_DIST + 1)) continue;
-        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
-        int ok = far_from(x, y, m->x, m->y, VILLAGE_SPACING);
-        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, VILLAGE_SPACING);
-        if (!ok || !is_coast(x, y)) continue;
-        village_t *v = &g.villages[g.village_count];
-        *v = (village_t){.x = (int16_t)x, .y = (int16_t)y, .fav = (uint8_t)((h >> 8) % FISH_COUNT)};
-        g.safe_zones[ZONE_VILLAGE + g.village_count] = (safe_zone_t){v->x, v->y, VILLAGE_SAFE_R};
-        g.village_count++;
+// --- estruturas ---------------------------------------------------------------
+
+// A pedra da sereia: água em volta (5x5) para dar para chegar.
+static int mermaid_spot(int x, int y) {
+    for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+            if (!tile_is_water(tile(x + dx, y + dy))) return 0;
+    return 1;
+}
+
+// Cais de vila: na costa e longe do forte do armeiro.
+static int village_spot(int x, int y) {
+    const safe_zone_t *a = &g.safe_zones[ZONE_ARMORY];
+    return is_coast(x, y) && (a->r <= 0 || far_from(x, y, a->x, a->y, ARMORY_SPACING));
+}
+
+// Sorteia (pela semente) até achar um lugar bom perto do centro da região.
+static int find_spot(int rx, int ry, uint32_t salt, int (*good)(int, int), int *ox, int *oy) {
+    for (int i = 0; i < 200; i++) {
+        uint32_t h = world_hash(rx * 256 + i, ry, g.seed ^ salt);
+        int x = rx * REGION_CELLS + (int)(h % (2 * STRUCT_SEARCH + 1)) - STRUCT_SEARCH;
+        int y = ry * REGION_CELLS + (int)((h >> 16) % (2 * STRUCT_SEARCH + 1)) - STRUCT_SEARCH;
+        if (good(x, y)) { *ox = x, *oy = y; return 1; }
+    }
+    return 0;
+}
+
+// Gaveta da região na tabela (hash com sondagem linear): a da região, ou a
+// vazia onde ela entraria.
+static structure_t *struct_slot(int rx, int ry) {
+    for (uint32_t i = world_hash(rx, ry, 0x57A7) & (STRUCT_SLOTS - 1);; i = (i + 1) & (STRUCT_SLOTS - 1)) {
+        structure_t *s = &g.structures[i];
+        if (!s->used || (s->rx == rx && s->ry == ry)) return s;
     }
 }
 
-// Forte do armeiro: também sai da semente do mapa. Vem depois das vilas para
-// ficar longe delas. Se não achar lugar, fica sem forte (r = 0).
+// Região já descoberta? NULL se ainda não.
+static const structure_t *struct_get(int rx, int ry) {
+    const structure_t *s = struct_slot(rx, ry);
+    return s->used ? s : 0;
+}
+
+// Descobre o que tem na região (só na primeira vez). Quando a tabela enche,
+// tudo recomeça: as estruturas voltam iguais (vêm da semente), só as vilas
+// ganham catálogo e encomenda novos.
+static void struct_resolve(int rx, int ry) {
+    if (rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H) return;
+    structure_t *s = struct_slot(rx, ry);
+    if (s->used) return;
+    if (g.struct_used >= STRUCT_SLOTS / 2 || g.village_count >= MAX_VILLAGES) {
+        memset(g.structures, 0, sizeof g.structures);
+        g.struct_used = g.village_count = 0;
+        s = struct_slot(rx, ry);
+    }
+    *s = (structure_t){.rx = (int16_t)rx, .ry = (int16_t)ry, .used = 1, .kind = STRUCT_NONE, .village = -1};
+    g.struct_used++;
+    if (rx == PORT_RX && ry == PORT_RY) return; // a região do porto já tem o porto
+    biome_t b = world_region_biome(rx, ry, g.seed);
+    uint32_t h = world_hash(rx, ry, g.seed ^ 0x57A0C);
+    int x, y;
+    if ((b == BIOME_ISLANDS || b == BIOME_MANGROVE) && h % VILLAGE_CHANCE == 0 &&
+        find_spot(rx, ry, 0x7111A, village_spot, &x, &y)) {
+        village_t *v = &g.villages[g.village_count];
+        *v = (village_t){.x = x, .y = y, .fav = (uint8_t)((h >> 8) % FISH_COUNT)};
+        market_init(&v->market, x, y, b);
+        new_village_catalog(v);
+        s->kind = STRUCT_VILLAGE, s->x = x, s->y = y, s->village = (int16_t)g.village_count++;
+    } else if (b == BIOME_REEF && h % MERMAID_CHANCE == 0 && find_spot(rx, ry, 0x5E7EA, mermaid_spot, &x, &y)) {
+        s->kind = STRUCT_MERMAID, s->x = x, s->y = y;
+    }
+}
+
+// Descobre as 3x3 regiões em volta de (x, y).
+static void struct_resolve_near(int x, int y) {
+    int rx0 = world_region_of(x), ry0 = world_region_of(y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) struct_resolve(rx, ry);
+}
+
+// Forte do armeiro: um só, numa ilha perto do porto, longe das vilas e da
+// sereia. Vem da semente do mapa. Se não achar lugar, fica sem forte (r = 0).
 static void place_armory(void) {
     safe_zone_t *z = &g.safe_zones[ZONE_ARMORY];
     *z = (safe_zone_t){0, 0, 0};
@@ -2296,34 +2692,33 @@ static void place_armory(void) {
         int x = PORT_X + (int)(h % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
         int y = PORT_Y + (int)((h >> 16) % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
         if (!far_from(x, y, PORT_X, PORT_Y, ARMORY_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, ARMORY_MAX_DIST + 1)) continue;
-        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
-        int ok = far_from(x, y, m->x, m->y, ARMORY_SPACING);
-        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, ARMORY_SPACING);
-        if (!ok || !is_coast(x, y)) continue;
-        *z = (safe_zone_t){(int16_t)x, (int16_t)y, ARMORY_SAFE_R};
+        if (struct_near(x, y, STRUCT_VILLAGE, ARMORY_SPACING) || struct_near(x, y, STRUCT_MERMAID, ARMORY_SPACING)) continue;
+        if (!is_coast(x, y)) continue;
+        *z = (safe_zone_t){x, y, ARMORY_SAFE_R};
         return;
     }
 }
 
 // --- API --------------------------------------------------------------------
 
-void game_init(uint8_t *tiles, uint32_t seed, uint32_t random_seed, game_send_fn send) {
+void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     memset(&g, 0, sizeof g);
-    g.tiles = tiles;
     g.seed = seed;
     g.rng = random_seed ? random_seed : 0x9E3779B9u;
     g.send = send;
-    world_generate(tiles, seed);
-    g.checksum = world_checksum(tiles);
+    chunks_init(seed);
+    for (int i = 0; i < PROBE_COUNT; i++)
+        g.probe_sum[i] = world_region_checksum(PORT_RX + PROBES[i][0], PORT_RY + PROBES[i][1], seed);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
-    place_mermaid();
-    place_villages();
+    market_init(&g.port_market, DOCK_X, DOCK_Y, world_region_biome(PORT_RX, PORT_RY, seed));
+    // As 5x5 regiões em volta do porto já nascem descobertas: o forte precisa
+    // saber onde ficam as vilas e a sereia de perto para não cair em cima.
+    for (int ry = PORT_RY - 2; ry <= PORT_RY + 2; ry++)
+        for (int rx = PORT_RX - 2; rx <= PORT_RX + 2; rx++) struct_resolve(rx, ry);
     place_armory();
     new_catalog();
-    memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
-    for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
     g.ghost = -1;
     g.next_boss = BOSS_FIRST + rnd_below(BOSS_FIRST);
@@ -2398,6 +2793,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
     case C_DELIVER:
         deliver(slot);
         break;
+    case C_WAYPOINT:
+        if (len >= 6) set_waypoint(slot, data[1], data[2] | data[3] << 8, data[4] | data[5] << 8);
+        break;
     }
 }
 
@@ -2405,6 +2803,8 @@ void game_save_all(void) {
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) storage_save(g.players[i].profile, prof(&g.players[i]));
 }
+
+size_t game_chunks(void) { return chunks_count(); }
 
 int game_online(void) {
     int n = 0;
@@ -2428,13 +2828,21 @@ void game_tick(void) {
     update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) send_state(i);
+    // Mudou o balcão mais perto? Manda os preços dele na hora, sem esperar o
+    // segundo virar (chegar na vila e ver o preço do porto confunde).
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING && market_near(&g.players[i]) != g.players[i].market) send_prices(i);
 
     if (g.tick % TICK_HZ == 0) {
-        for (int i = 0; i < FISH_COUNT; i++) g.pressure[i] = g.pressure[i] * 99 / 100;
+        for (int i = 0; i < MAX_PLAYERS; i++) // vilas e sereias perto de cada barco
+            if (g.players[i].state == SLOT_PLAYING) struct_resolve_near(g.players[i].x, g.players[i].y);
+        market_decay();
         send_prices(-1);
         send_marks(-1);
         send_catalogs(); // a contagem até a troca anda
     }
+    if (g.tick % DIFFUSE_EVERY == 0) market_diffuse();
+    if (g.tick % DEMAND_DRIFT_EVERY == 0) market_drift();
     if (g.tick % 50 == 0) send_rank(-1);
     if (g.tick % SAVE_EVERY == 0) game_save_all();
 }

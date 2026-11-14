@@ -3,6 +3,10 @@
 // conectados, quantas vezes caíram, o maior buraco entre dois S_STATE e o
 // /status do servidor. No fim diz se o teste passou.
 //
+// Metade dos robôs (robo2, robo4...) são exploradores: navegam reto para longe
+// do porto, para o mundo grande trabalhar (chunks, cardumes em volta de cada
+// barco, vilas descobertas). Os outros ficam rodando perto do porto e vendem.
+//
 // Uso: bots [ip] [porta] [robôs] [minutos]
 //   bots                          -> 192.168.4.1 80 8 60 (ESP32 em ponto de acesso)
 //   bots 127.0.0.1 8080 8 5       -> servidor do PC por 5 minutos
@@ -59,6 +63,8 @@ typedef struct {
     uint64_t next_action;     // quando o robô decide de novo
     uint64_t reconnect_at;    // se caiu, quando tentar de novo
     int x, y;                 // posição (do S_STATE)
+    int still_x, still_y;     // explorador: onde estava na última decisão
+    int8_t dx, dy;            // explorador: rumo atual
     uint8_t flags;
     uint8_t in[IN_CAP];
     size_t in_len;
@@ -234,11 +240,35 @@ static int bot_read(int i) {
 
 // --- o "cérebro" do robô --------------------------------------------------------
 
+static int is_explorer(int i) { return i % 2 == 1; }
+
+// Rumo novo, nunca parado.
+static void new_heading(bot_t *b) {
+    do {
+        b->dx = (int8_t)(rnd() % 3 - 1);
+        b->dy = (int8_t)(rnd() % 3 - 1);
+    } while (!b->dx && !b->dy);
+}
+
+// Explorador: segue o rumo e só troca se ficou parado (bateu na costa) ou, de
+// vez em quando, para não ir sempre na mesma linha.
+static int explorer_think(bot_t *b) {
+    int stuck = b->x == b->still_x && b->y == b->still_y;
+    b->still_x = b->x, b->still_y = b->y;
+    if (stuck || (!b->dx && !b->dy) || rnd() % 15 == 0) new_heading(b);
+    uint8_t m[3] = {C_INPUT, (uint8_t)b->dx, (uint8_t)b->dy};
+    return ws_send(b->fd, m, 3);
+}
+
 static void bot_think(int i) {
     bot_t *b = &bots[i];
     uint64_t now = now_ms();
     if (!b->playing || now < b->next_action) return;
     b->next_action = now + 1000 + rnd() % 3000;
+    if (is_explorer(i)) {
+        if (!explorer_think(b)) bot_drop(i, "envio");
+        return;
+    }
     int ok = 1;
     uint32_t r = rnd() % 10;
     if (r < 6) {
@@ -332,11 +362,16 @@ int main(int argc, char **argv) {
 
         if (now >= next_report) {
             next_report += 60000;
-            int online = 0;
-            for (int i = 0; i < n_bots; i++) online += bots[i].playing;
-            printf("[%3d min] jogando %d/%d | estados/s %.1f | maior buraco %llu ms | quedas %u | erros %u\n",
+            int online = 0, far = 0;
+            for (int i = 0; i < n_bots; i++) {
+                online += bots[i].playing;
+                if (!bots[i].playing) continue;
+                int dx = abs(bots[i].x - DOCK_X), dy = abs(bots[i].y - DOCK_Y), d = dx > dy ? dx : dy;
+                if (d > far) far = d;
+            }
+            printf("[%3d min] jogando %d/%d | estados/s %.1f | maior buraco %llu ms | quedas %u | erros %u | mais longe do porto %d\n",
                    (int)((now - start) / 60000), online, n_bots, st.states_min / 60.0,
-                   (unsigned long long)st.gap_max_min, st.drops, st.errors);
+                   (unsigned long long)st.gap_max_min, st.drops, st.errors, far);
             st.states_min = 0;
             st.gap_max_min = 0;
             print_status();

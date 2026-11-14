@@ -28,6 +28,11 @@ typedef struct {
 
 extern const species_t SPECIES[FISH_COUNT];
 
-// Sorteia uma espécie do bioma do tile; `r` é um número aleatório qualquer.
-// Devolve FISH_NONE se o tile não tem peixe (terra).
-uint8_t fish_roll(tile_t tile, uint32_t r);
+// Sorteia uma espécie que vive no tile, com as chances do bioma da região;
+// `r` é um número aleatório qualquer. Devolve FISH_NONE se o tile não tem
+// peixe (terra).
+uint8_t fish_roll(tile_t tile, biome_t biome, uint32_t r);
+
+// Quanto o bioma puxa a espécie, em % do peso normal (100 = igual). O mercado
+// usa também: peixe que sobra num bioma vale menos nos balcões de lá.
+uint16_t fish_biome_pct(int species, biome_t biome);
