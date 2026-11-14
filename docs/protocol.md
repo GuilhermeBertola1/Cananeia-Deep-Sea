@@ -290,7 +290,7 @@ Bosses e outros NPCs entram aqui como tipos novos.
 
 ### Ecossistema e eventos do mundo
 
-- **Estoque de peixe**: o mapa é dividido em 16 × 16 regiões de 32 × 32 células, cada uma com até 250 peixes. Pescar tira do estoque, e a chance de pescar é multiplicada por `estoque / 250`. O estoque cresce sozinho a cada 5 s (devagar quando está vazio ou cheio, rápido no meio): uma região vazia volta em uns 6 minutos. Cardumes nascem mais onde tem peixe e vão embora quando a região cai abaixo de 20%.
+- **Estoque de peixe**: o mapa é dividido em regiões de 32 × 32 células, cada uma com até 250 peixes. Só as regiões que alguém pescou ficam guardadas (as outras estão cheias). Pescar tira do estoque, e a chance de pescar é multiplicada por `estoque / 250`. O estoque cresce sozinho a cada 5 s (devagar quando está vazio ou cheio, rápido no meio): uma região vazia volta em uns 6 minutos. Cardumes nascem mais onde tem peixe e vão embora quando a região cai abaixo de 20%.
 - **Vilas** (3, entre 60 e 200 células do porto, na costa de outras ilhas, sempre no mesmo lugar para a mesma semente; zona segura de 10 células): o lojista e o reparo funcionam, e a vila paga 25% a mais pela espécie preferida. Estaleiro, mercenário e mecânico só no porto.
 - **Tubarões** (10 no mar, um novo a cada 30 s se faltar): só nadam em água funda ou normal, fora das zonas seguras. Caçam o barco mais perto a até 15 células que tenha menos de 120 de vida, a 7 células/s, e mordem 8 de vida a cada 1,5 s. Vida 0 por mordida é morte. 40 de vida; afundar um vale $15.
 - **Eventos**: um por vez, o primeiro de 2 a 4 min depois de o servidor ligar e depois um a cada 4 a 8 min, sempre a 40 células ou mais do porto e nunca dentro de zona segura.
