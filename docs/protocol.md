@@ -258,6 +258,8 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 
 ### Marcas do minimapa (`S_MARKS`)
 
+Cada barco recebe só os cardumes a até 1024 células dele (no máximo 120). Bags, coroas e lugares vão sempre.
+
 | Tipo | Extra |
 | --- | --- |
 | 1 cardume | espécie |

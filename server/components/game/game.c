@@ -9,7 +9,7 @@
 #include "boat.h"
 #include "weapon.h"
 
-#define MAX_SCHOOLS 70
+#define MAX_SCHOOLS 240 // 30 por barco, com 8 barcos espalhados
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
 #define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
 #define BASE_SPEED 5 // células por segundo
@@ -67,9 +67,9 @@
 
 // Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
 // nem nas zonas seguras, então a costa é um refúgio.
-#define MAX_PREDATORS 12
-#define SHARK_COUNT 10            // quantos tubarões o mar tenta manter
-#define SHARK_RESPAWN (30 * TICK_HZ) // um tubarão novo a cada 30 s, se faltar
+#define MAX_PREDATORS 44          // 5 tubarões por barco com 8 barcos, mais o navio fantasma
+#define SHARKS_PER_BOAT 5         // quantos tubarões o mar tenta manter em volta de cada barco
+#define SHARK_RESPAWN (15 * TICK_HZ) // a cada 15 s, um tubarão novo em cada barco que tiver menos
 #define SHARK_HP 40
 #define SHARK_BITE 8              // dano de cada mordida
 #define SHARK_BITE_EVERY 15       // ticks entre mordidas (1,5 s)
@@ -341,15 +341,6 @@ static int chance_permille(uint32_t pm) { return rnd_below(1000) < pm; }
 
 static tile_t tile(int32_t x, int32_t y) { return chunks_tile(x, y); }
 
-// Por enquanto tudo nasce numa área de 1024 x 1024 em volta do porto (o
-// tamanho do mapa antigo). Sorteando no mundo inteiro, cada tentativa criaria
-// um chunk novo longe de todo mundo. O passo 7 troca isso por "perto de algum barco".
-#define SPAWN_RANGE 512
-static void random_cell(int *x, int *y) {
-    *x = PORT_X - SPAWN_RANGE + (int)rnd_below(2 * SPAWN_RANGE);
-    *y = PORT_Y - SPAWN_RANGE + (int)rnd_below(2 * SPAWN_RANGE);
-}
-
 // Estoque da região onde fica a célula (x, y).
 static uint8_t *stock_at(int x, int y) {
     x = x < 0 ? 0 : x >= MAP_W ? MAP_W - 1 : x;
@@ -445,6 +436,58 @@ static int far_from(int x, int y, int ox, int oy, int dist) {
     return dist2(dx, dy) >= (int64_t)dist * dist;
 }
 
+// O mundo é enorme, mas só tem vida perto dos barcos. Cada barco tem uma
+// "bolha" em volta (SPAWN_RANGE para cada lado), e o servidor mantém nela
+// SCHOOLS_PER_BOAT cardumes e SHARKS_PER_BOAT tubarões. O que já está na
+// bolha conta para todos os barcos que estão ali: barcos juntos dividem os
+// bichos em vez de encher o mar. Assim só a parte perto dos barcos vira chunk.
+#define SPAWN_RANGE 256
+#define SCHOOLS_PER_BOAT 30
+// Tubarão e cardume que ficam mais longe que isso de todos os barcos somem,
+// e a vaga volta a nascer perto de alguém.
+#define DESPAWN_RANGE 512
+
+// Uma célula a até SPAWN_RANGE de (cx, cy), fora da tela de quem está lá
+// (VIEW_RADIUS), para nada aparecer do nada na frente de ninguém.
+static void cell_near(int cx, int cy, int *x, int *y) {
+    int dx, dy;
+    do { // sorteia de novo enquanto cair dentro da tela (cai lá 1 vez em 7, mais ou menos)
+        dx = (int)rnd_below(2 * SPAWN_RANGE + 1) - SPAWN_RANGE;
+        dy = (int)rnd_below(2 * SPAWN_RANGE + 1) - SPAWN_RANGE;
+    } while (iabs(dx) <= VIEW_RADIUS && iabs(dy) <= VIEW_RADIUS);
+    *x = cx + dx, *y = cy + dy;
+}
+
+// Perto de um barco sorteado entre os que estão jogando (sem ninguém, perto
+// do porto). Para eventos e bosses, que são um só no mar todo.
+static void random_cell(int *x, int *y) {
+    int cx = PORT_X, cy = PORT_Y, online[MAX_PLAYERS], n = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) online[n++] = i;
+    if (n) {
+        const player_t *p = &g.players[online[rnd_below((uint32_t)n)]];
+        cx = p->x, cy = p->y;
+    }
+    cell_near(cx, cy, x, y);
+}
+
+// (x, y) está na bolha do barco?
+static int in_bubble(const player_t *p, int x, int y) {
+    return iabs(x - p->x) <= SPAWN_RANGE && iabs(y - p->y) <= SPAWN_RANGE;
+}
+
+// Longe de todos os barcos? Sem ninguém jogando, nada está longe (nada some).
+static int far_from_boats(int x, int y) {
+    int any = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        const player_t *p = &g.players[i];
+        if (p->state != SLOT_PLAYING) continue;
+        if (!far_from(x, y, p->x, p->y, DESPAWN_RANGE)) return 0;
+        any = 1;
+    }
+    return any;
+}
+
 // Célula onde o tiro está (arredonda para a mais perto).
 static int shot_cell(int32_t v) { return (v + SUB / 2) / SUB; }
 
@@ -506,15 +549,23 @@ static void send_prices(int slot) {
     slot < 0 ? send_all(&w) : send_w(slot, &w);
 }
 
-static void send_marks(int slot) {
+// Pontos do minimapa de um barco. Cardumes só até MARK_RANGE dele (o mapa
+// grande mostra 2048 células), e no máximo MARK_SCHOOLS_MAX, para caber no
+// buffer junto com bags, coroas e lugares.
+#define MARK_RANGE 1024
+#define MARK_SCHOOLS_MAX 120
+
+static void send_marks_to(int slot) {
+    const player_t *p = &g.players[slot];
     writer_t w = writer(out, sizeof out);
     put_u8(&w, S_MARKS);
     size_t count_at = w.len;
     put_u8(&w, 0);
-    uint8_t n = 0;
-    for (int i = 0; i < MAX_SCHOOLS; i++) {
+    uint8_t n = 0, schools = 0;
+    for (int i = 0; i < MAX_SCHOOLS && schools < MARK_SCHOOLS_MAX; i++) {
         const school_t *s = &g.schools[i];
-        if (!s->alive) continue;
+        if (!s->alive || iabs(s->x - p->x) > MARK_RANGE || iabs(s->y - p->y) > MARK_RANGE) continue;
+        schools++;
         put_u16(&w, s->x);
         put_u16(&w, s->y);
         put_u8(&w, MARK_SCHOOL);
@@ -551,7 +602,14 @@ static void send_marks(int slot) {
         n++;
     }
     out[count_at] = n;
-    slot < 0 ? send_all(&w) : send_w(slot, &w);
+    send_w(slot, &w);
+}
+
+// slot < 0: para todo mundo (cada um recebe os pontos perto dele).
+static void send_marks(int slot) {
+    if (slot >= 0) { send_marks_to(slot); return; }
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) send_marks_to(i);
 }
 
 // Em que slot do barco o item da bolsa está (0 = não está equipado).
@@ -1499,13 +1557,14 @@ static int pred_step(predator_t *pd, int dx, int dy) {
     return 0;
 }
 
-static void spawn_shark(void) {
+// Um tubarão novo na bolha do barco p.
+static void spawn_shark(const player_t *p) {
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (pd->alive) continue;
         for (int tries = 0; tries < 200; tries++) {
             int x, y;
-            random_cell(&x, &y);
+            cell_near(p->x, p->y, &x, &y);
             if (tile(x, y) != TILE_DEEP || !far_from(x, y, PORT_X, PORT_Y, 50) || in_safe_zone(x, y)) continue;
             *pd = (predator_t){.alive = 1, .kind = PRED_SHARK, .x = x, .y = y, .hp = SHARK_HP,
                                .target = -1, .heading = (uint8_t)rnd_below(8)};
@@ -1559,14 +1618,14 @@ static void update_ghost(predator_t *pd) {
 }
 
 static void update_predators(void) {
-    int alive = 0;
     for (int i = 0; i < MAX_PREDATORS; i++) {
         predator_t *pd = &g.predators[i];
         if (!pd->alive) continue;
         if (pd->bite) pd->bite--;
         if (pd->grabbed) pd->grabbed--;
         if (pd->kind == PRED_GHOST) { update_ghost(pd); continue; }
-        alive++;
+        // Ficou longe de todo mundo: some, e a vaga nasce de novo perto de alguém.
+        if (g.tick % TICK_HZ == 0 && far_from_boats(pd->x, pd->y)) { pd->alive = 0; continue; }
         // A presa escapa se consertou o barco, entrou na zona segura ou fugiu longe.
         if (pd->target >= 0) {
             const player_t *t = &g.players[pd->target];
@@ -1598,9 +1657,19 @@ static void update_predators(void) {
             bite(pd->target, pd);
         }
     }
-    if (alive < SHARK_COUNT && g.tick >= g.next_shark) {
-        spawn_shark();
+    // A cada SHARK_RESPAWN, cada barco com menos de SHARKS_PER_BOAT tubarões na bolha ganha mais um.
+    if (g.tick >= g.next_shark) {
         g.next_shark = g.tick + SHARK_RESPAWN;
+        for (int t = 0; t < MAX_PLAYERS; t++) {
+            const player_t *p = &g.players[t];
+            if (p->state != SLOT_PLAYING) continue;
+            int n = 0;
+            for (int i = 0; i < MAX_PREDATORS; i++) {
+                const predator_t *pd = &g.predators[i];
+                n += pd->alive && pd->kind == PRED_SHARK && in_bubble(p, pd->x, pd->y);
+            }
+            if (n < SHARKS_PER_BOAT) spawn_shark(p);
+        }
     }
 }
 
@@ -2094,22 +2163,32 @@ static void update_player(int slot) {
 }
 
 static void update_schools(void) {
-    int attempts = 2000;
     for (int i = 0; i < MAX_SCHOOLS; i++) {
         school_t *s = &g.schools[i];
         // O cardume vai embora no fim da vida ou quando a região fica sem peixe.
+        // Também some quando fica longe de todos os barcos, para nascer perto de alguém.
         if (s->alive && (s->expires <= g.tick || *stock_at(s->x, s->y) < SCHOOL_MIN_STOCK)) s->alive = 0;
-        // Nada de cardume colado no porto: precisa sair para buscar. E ele
-        // nasce mais onde tem mais peixe: numa região com 40% do estoque, só
-        // 40% das tentativas valem.
-        while (!s->alive && attempts-- > 0) {
+        if (s->alive && g.tick % TICK_HZ == 0 && far_from_boats(s->x, s->y)) s->alive = 0;
+    }
+    // Completa a bolha de cada barco até SCHOOLS_PER_BOAT. Nada de cardume
+    // colado no porto: precisa sair para buscar. E ele nasce mais onde tem
+    // mais peixe: numa região com 40% do estoque, só 40% das tentativas valem.
+    int free_i = 0;
+    for (int t = 0; t < MAX_PLAYERS; t++) {
+        const player_t *p = &g.players[t];
+        if (p->state != SLOT_PLAYING) continue;
+        int have = 0;
+        for (int i = 0; i < MAX_SCHOOLS; i++) have += g.schools[i].alive && in_bubble(p, g.schools[i].x, g.schools[i].y);
+        for (int attempts = 300; have < SCHOOLS_PER_BOAT && attempts > 0; attempts--) {
+            while (free_i < MAX_SCHOOLS && g.schools[free_i].alive) free_i++;
+            if (free_i == MAX_SCHOOLS) break; // sem vaga
             int x, y;
-            random_cell(&x, &y);
+            cell_near(p->x, p->y, &x, &y);
             int dx = x - PORT_X, dy = y - PORT_Y;
             tile_t t = tile(x, y);
             if (!tile_is_water(t) || dist2(dx, dy) < 30 * 30) continue;
             if (rnd_below(STOCK_MAX) >= *stock_at(x, y)) continue;
-            *s = (school_t){
+            g.schools[free_i] = (school_t){
                 .alive = 1,
                 .x = (uint16_t)x,
                 .y = (uint16_t)y,
@@ -2117,6 +2196,7 @@ static void update_schools(void) {
                 .species = fish_roll(t, rnd()),
                 .expires = g.tick + 600 + rnd_below(1200), // 1 a 3 minutos
             };
+            have++;
         }
     }
     // Cardumes migram devagar.
@@ -2356,7 +2436,6 @@ void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
-    for (int i = 0; i < SHARK_COUNT; i++) spawn_shark();
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
     g.ghost = -1;
     g.next_boss = BOSS_FIRST + rnd_below(BOSS_FIRST);
