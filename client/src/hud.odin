@@ -27,6 +27,8 @@ minimap_color :: proc(t: Tile) -> rl.Color {
 	return TILE_STYLE[t].fg
 }
 
+COLOR_WAYPOINT :: rl.Color{255, 120, 220, 255}
+
 // Um pedaço do mapa desenhado numa textura, 1 pixel a cada `step` células.
 // A tela mostra `cells` x `cells` células centradas no barco, mas a textura
 // cobre um pouco mais (`margin` de cada lado, com o canto em ox, oy): assim o
@@ -123,6 +125,14 @@ draw_map_at :: proc(v: ^Map_View, sx, sy, size: f32) {
 		dot(x, y, k, s.boss.x, s.boss.y, max(3, 3 * k), boss_color(s.boss.kind))
 	}
 	dot(x, y, k, PORT_X, PORT_Y, max(2, 2 * k), COLOR_ACCENT)
+	// Waypoints: quadrado rosa (o que o HUD segue pisca); no mapa grande, com o número.
+	for w, i in s.waypoints {
+		if w[0] == 0 && w[1] == 0 do continue
+		color := COLOR_WAYPOINT
+		if s.wp_follow == i + 1 && int(rl.GetTime() * 3) % 2 == 0 do color = rl.WHITE
+		dot(x, y, k, w[0], w[1], max(3, 2 * k), color)
+		if v == &s.bigmap do text(fmt.tprintf("%d", i + 1), x + f32(w[0]) * k + 5, y + f32(w[1]) * k - 6, 10, color)
+	}
 	for b in s.boats[:s.boat_count] {
 		dot(x, y, k, b.x, b.y, max(2, 1.5 * k), PLAYER_COLORS[s.players[b.id].color % len(PLAYER_COLORS)])
 	}
@@ -276,6 +286,14 @@ draw_hud :: proc() {
 	if target, ok := nearest_target(); ok {
 		text(target, x, y, 10, COLOR_ACCENT)
 		y += 14
+	}
+	if s.wp_follow > 0 {
+		w := s.waypoints[s.wp_follow - 1]
+		if w[0] != 0 || w[1] != 0 {
+			dir, dist := compass(w[0], w[1])
+			text(fmt.tprintf("Waypoint %d: %d %s", s.wp_follow, dist, dir), x, y, 10, COLOR_WAYPOINT)
+			y += 14
+		}
 	}
 	text("M amplia o mapa · N liga/desliga o som", x, y, 10, COLOR_QUIET)
 	y += 22
@@ -827,8 +845,41 @@ draw_big_map :: proc() {
 	size := math.floor(min(sw, sh) * 0.86 / side * 4) / 4 * side // múltiplo de 1/4 para os pixels ficarem iguais
 	x, y := (sw - size) / 2, (sh - size) / 2
 	draw_map_at(&s.bigmap, x, y, size)
+	s.bigmap_rect = {x, y, size, size}
 	rl.DrawRectangleLinesEx({x - 2, y - 2, size + 4, size + 4}, 2, COLOR_ACCENT)
 	text("Mapa do oceano  -  M ou Esc fecha", x, y - 26, 20, COLOR_ACCENT)
+	text("Clique marca ou apaga um waypoint (até 8)  ·  1 a 8 escolhe qual seguir", x, y + size + 8, 10, COLOR_QUIET)
+}
+
+// Clique no mapa grande: em cima de um waypoint (até 6 pixels), apaga; num
+// lugar vazio, marca um novo no primeiro número livre e já passa a seguir ele.
+// Quem guarda é o servidor, que responde com o S_WAYPOINTS.
+click_big_map :: proc() {
+	r := s.bigmap_rect
+	m := rl.GetMousePosition()
+	if r.width <= 0 || !rl.CheckCollisionPointRec(m, r) do return
+	k := r.width / f32(BIGMAP_CELLS)
+	cx := s.x - BIGMAP_CELLS / 2 + i32((m.x - r.x) / k)
+	cy := s.y - BIGMAP_CELLS / 2 + i32((m.y - r.y) / k)
+	free := -1
+	for w, i in s.waypoints {
+		if w[0] == 0 && w[1] == 0 {
+			if free < 0 do free = i
+			continue
+		}
+		if abs(f32(w[0] - cx) * k) <= 6 && abs(f32(w[1] - cy) * k) <= 6 {
+			send_waypoint(u8(i), 0, 0)
+			if s.wp_follow == i + 1 do s.wp_follow = 0
+			return
+		}
+	}
+	if free < 0 {
+		add_log("Já tem 8 waypoints. Clique em um deles no mapa para apagar.")
+		return
+	}
+	if cx <= 0 || cy <= 0 || cx >= MAP_W || cy >= MAP_H do return
+	send_waypoint(u8(free), cx, cy)
+	s.wp_follow = free + 1
 }
 
 // --- tela de entrada ---------------------------------------------------------------

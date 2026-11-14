@@ -695,6 +695,30 @@ static void send_marks(int slot) {
         if (g.players[i].state == SLOT_PLAYING) send_marks_to(i);
 }
 
+// Os waypoints do jogador: só ele recebe.
+static void send_waypoints(int slot) {
+    const profile_t *pr = prof(&g.players[slot]);
+    writer_t w = writer(out, sizeof out);
+    put_u8(&w, S_WAYPOINTS);
+    put_u8(&w, WAYPOINT_COUNT);
+    for (int i = 0; i < WAYPOINT_COUNT; i++) {
+        put_u16(&w, pr->waypoint[i][0]);
+        put_u16(&w, pr->waypoint[i][1]);
+    }
+    send_w(slot, &w);
+}
+
+// Marca (ou apaga, com x = y = 0) o waypoint `index`. Qualquer ponto do mapa
+// vale: é só uma anotação do jogador, o servidor só guarda.
+static void set_waypoint(int slot, uint8_t index, int x, int y) {
+    if (index >= WAYPOINT_COUNT) return;
+    profile_t *pr = prof(&g.players[slot]);
+    pr->waypoint[index][0] = (uint16_t)x;
+    pr->waypoint[index][1] = (uint16_t)y;
+    storage_save(g.players[slot].profile, pr);
+    send_waypoints(slot);
+}
+
 // Em que slot do barco o item da bolsa está (0 = não está equipado).
 static uint8_t equipped_slot(const profile_t *pr, int bag_index) {
     for (int e = 0; e < EQUIP_SLOTS; e++)
@@ -2433,6 +2457,7 @@ static void join(int slot, const uint8_t *data, size_t len) {
     send_prices(slot);
     struct_resolve_near(p->x, p->y);
     send_marks(slot);
+    send_waypoints(slot);
     send_inventory(slot);
     send_boat(slot);
     send_rank(-1);
@@ -2641,6 +2666,9 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
         break;
     case C_DELIVER:
         deliver(slot);
+        break;
+    case C_WAYPOINT:
+        if (len >= 6) set_waypoint(slot, data[1], data[2] | data[3] << 8, data[4] | data[5] << 8);
         break;
     }
 }

@@ -45,6 +45,7 @@ typedef struct {
     uint8_t has_mission;       // a sereia pediu a coroa de alguém
     uint8_t mission_target;    // índice do perfil do alvo
     uint8_t map_version;       // MAP_VERSION do mapa em que x, y foram salvos (0 = mapa antigo)
+    uint16_t waypoint[WAYPOINT_COUNT][2]; // x, y de cada waypoint; (0, 0) = vazio
 } profile_t;
 
 #define PROFILE_V03_SIZE 200

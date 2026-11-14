@@ -22,6 +22,7 @@ C_MERMAID :: 0x0A
 C_COMBINE :: 0x0B
 C_BUY :: 0x0C
 C_DELIVER :: 0x0D
+C_WAYPOINT :: 0x0E
 
 // Servidor -> cliente
 S_WELCOME :: 0x81
@@ -35,6 +36,9 @@ S_PRICES :: 0x88
 S_INVENTORY :: 0x89
 S_BOAT :: 0x8A
 S_CATALOG :: 0x8B
+S_WAYPOINTS :: 0x8C
+
+WAYPOINT_COUNT :: 8
 
 ERR_BAD_NAME :: 1
 ERR_NAME_ONLINE :: 2
@@ -252,5 +256,11 @@ send_buy :: proc(shop, offer: u8) {
 // Entrega a encomenda do mascate da vila onde o barco está.
 send_deliver :: proc() {
 	buf := [1]u8{C_DELIVER}
+	net_send(buf[:])
+}
+
+// Marca o waypoint `index` em (x, y). (0, 0) apaga.
+send_waypoint :: proc(index: u8, x, y: i32) {
+	buf := [6]u8{C_WAYPOINT, index, u8(x), u8(x >> 8), u8(y), u8(y >> 8)}
 	net_send(buf[:])
 }

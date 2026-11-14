@@ -26,11 +26,12 @@ enum {
     C_COMBINE = 0x0B, // u8 índice a, u8 índice b
     C_BUY = 0x0C,     // u8 loja (SHOP_*), u8 oferta
     C_DELIVER = 0x0D, // entrega a encomenda do mascate da vila onde está
+    C_WAYPOINT = 0x0E, // u8 índice, u16 x, u16 y: marca o waypoint (x = y = 0 apaga)
 };
 
 // Servidor -> cliente
 enum {
-    S_WELCOME = 0x81, // u8 seu_id, u32 seed, u16 map_w, u16 map_h, u8 tick_hz, u8 rw, u8 rh, rw*rh u32 checksum
+    S_WELCOME = 0x81, // u8 seu_id, u32 seed, u32 map_w, u32 map_h, u8 tick_hz, u8 n, n x {u16 rx, u16 ry, u32 checksum}
     S_ERROR = 0x82,   // u8 código (ERR_*)
     S_STATE = 0x83,   // estado visível, todo tick
     S_PLAYER = 0x84,  // u8 id, u8 cor, u8 len, nome[len]
@@ -41,7 +42,11 @@ enum {
     S_INVENTORY = 0x89,
     S_BOAT = 0x8A,
     S_CATALOG = 0x8B, // catálogo do mascate da vila onde o barco está
+    S_WAYPOINTS = 0x8C, // u8 n, n x {u16 x, u16 y}: os waypoints do jogador ((0, 0) = vazio)
 };
+
+// Waypoints: pontos que cada capitão marca no mapa, só ele vê. Ficam no perfil.
+#define WAYPOINT_COUNT 8
 
 enum { ERR_BAD_NAME = 1, ERR_NAME_ONLINE = 2, ERR_FULL = 3, ERR_VERSION = 4, ERR_BAD_PASSWORD = 5, ERR_WRONG_PASSWORD = 6 };
 enum { EV_CATCH = 1, EV_SOLD = 2, EV_HOLD_FULL = 3, EV_NOTHING_TO_SELL = 4, EV_WELCOME = 5, EV_ITEM = 6, EV_BAG_FULL = 7,

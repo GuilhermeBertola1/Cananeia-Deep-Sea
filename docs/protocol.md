@@ -34,6 +34,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x0B` | `C_COMBINE` | `u8` índice a, `u8` índice b na bolsa: o mecânico junta os dois itens (mesmo tipo) num só, no lugar de `a`. Só no cais |
 | `0x0C` | `C_BUY` | `u8` loja (0 armeiro, 1 + v mascate da vila v), `u8` oferta. No armeiro, só no cais do forte; no mascate, só no cais daquela vila |
 | `0x0D` | `C_DELIVER` | Entrega a encomenda do mascate da vila onde o barco está |
+| `0x0E` | `C_WAYPOINT` | `u8` índice (0 a 7), `u16` x, `u16` y: marca o waypoint; x = y = 0 apaga |
 
 ## Servidor → cliente
 
@@ -50,6 +51,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
 | `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
 | `0x8B` | `S_CATALOG` | a cada 1 s para quem está no cais de uma vila, e logo depois de uma compra, entrega ou troca | ver abaixo |
+| `0x8C` | `S_WAYPOINTS` | ao entrar e depois de cada `C_WAYPOINT` | `u8` n (8), n × (`u16` x, `u16` y): os waypoints do jogador, (0, 0) = vazio. Ficam no perfil e só o dono recebe |
 
 ### `S_STATE`
 

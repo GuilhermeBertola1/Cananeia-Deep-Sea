@@ -214,6 +214,9 @@ State :: struct {
 	inv_cursor:    int,
 	discard_armed: bool, // apertou X uma vez: o próximo X joga fora
 	big_map:       bool,
+	bigmap_rect:   rl.Rectangle, // onde o mapa grande foi desenhado (para o clique)
+	waypoints:     [WAYPOINT_COUNT][2]i32, // x, y de cada waypoint; (0, 0) = vazio
+	wp_follow:     int, // waypoint que o HUD segue: número (1 a 8), 0 = nenhum
 	log:           [LOG_SIZE]Log_Line,
 	log_count:     int,
 	popups:        [8]Popup,
@@ -391,6 +394,14 @@ update_playing :: proc() {
 	}
 
 	if rl.IsKeyPressed(.M) do s.big_map = !s.big_map
+	// Mapa grande aberto: clique marca ou apaga um waypoint, 1 a 8 escolhe qual
+	// seguir (o mesmo número de novo para de seguir).
+	if s.big_map && !menu_open() {
+		if rl.IsMouseButtonPressed(.LEFT) do click_big_map()
+		for i in 0 ..< WAYPOINT_COUNT {
+			if rl.IsKeyPressed(rl.KeyboardKey(int(rl.KeyboardKey.ONE) + i)) do s.wp_follow = 0 if s.wp_follow == i + 1 else i + 1
+		}
+	}
 	if rl.IsKeyPressed(.N) do add_log("Som ligado." if toggle_sound() else "Som desligado. N liga de novo.")
 	// E fala com quem está perto: o lojista no cais, a sereia na pedra dela.
 	if rl.IsKeyPressed(.E) && !s.inv_open {
@@ -1023,6 +1034,13 @@ on_net_message :: proc(data: []u8) {
 		for &l in levels do l = int(read_u8(&r))
 		if !r.ok do return
 		s.boat_level = levels
+
+	case S_WAYPOINTS:
+		n := int(read_u8(&r))
+		for i in 0 ..< n {
+			x, y := i32(read_u16(&r)), i32(read_u16(&r))
+			if r.ok && i < WAYPOINT_COUNT do s.waypoints[i] = {x, y}
+		}
 
 	case S_CATALOG:
 		c := Catalog{village = int(read_u8(&r)), secs = int(read_u16(&r))}
