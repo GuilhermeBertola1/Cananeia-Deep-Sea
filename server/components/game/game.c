@@ -27,20 +27,14 @@
 // Posição do tiro em 1/256 de célula, para andar em qualquer ângulo só com inteiros.
 #define SUB 256
 #define CROWN_BOUNTY_CENTS 2500 // o mercenário paga $25 por coroa
-// A sereia mora numa pedra em mar aberto, longe do porto.
-#define MERMAID_MIN_DIST 70
-#define MERMAID_MAX_DIST 110
+// A sereia mora numa pedra no meio do Recife (ver "estruturas").
 #define MERMAID_REACH 3   // até quantas células dá para falar com ela
 #define MERMAID_SAFE_R 8  // zona segura em volta da pedra
 #define SPIN_COOLDOWN (60 * TICK_HZ) // uma volta na roleta por minuto
 #define STEAL_PCT 10
 #define STEAL_MAX_CENTS 10000 // ela rouba 10% do dinheiro, no máximo $100
-// Vilas de pescadores na costa de outras ilhas: vendem e consertam, e cada
-// uma paga mais por uma espécie.
-#define VILLAGE_COUNT 3
-#define VILLAGE_MIN_DIST 60   // do porto
-#define VILLAGE_MAX_DIST 200
-#define VILLAGE_SPACING 50    // de outra vila ou da sereia
+// Vilas de pescadores na costa das ilhas do Mangue e do Arquipélago: vendem e
+// consertam, e cada uma paga mais por uma espécie (ver "estruturas").
 #define VILLAGE_SAFE_R 10
 #define VILLAGE_BONUS_PCT 25  // a mais pela espécie preferida
 
@@ -48,7 +42,7 @@
 // para o jogador sair do porto para comprar a primeira arma.
 #define ARMORY_MIN_DIST 40   // do porto
 #define ARMORY_MAX_DIST 90
-#define ARMORY_SPACING 30    // da sereia e das vilas
+#define ARMORY_SPACING 30    // das vilas e das pedras da sereia
 #define ARMORY_SAFE_R 8
 
 // Mascate: em cada vila, ao lado do lojista. Vende itens épicos já
@@ -274,7 +268,27 @@ typedef struct {
     uint16_t dmg[MAX_PLAYERS]; // dano que cada slot deu nele
 } boss_t;
 
-enum { ZONE_PORT = 0, ZONE_MERMAID, ZONE_ARMORY, ZONE_VILLAGE, SAFE_ZONE_COUNT = ZONE_VILLAGE + VILLAGE_COUNT };
+// Zonas seguras fixas. As das vilas e da sereia vêm das estruturas (in_safe_zone).
+enum { ZONE_PORT = 0, ZONE_ARMORY, SAFE_ZONE_COUNT };
+
+// Estruturas: vilas e pedras da sereia não são mais fixas. Cada região do
+// mapa pode ter uma, sorteada pela semente (sempre a mesma no mesmo mapa). O
+// servidor só descobre o que tem numa região quando algum barco chega perto
+// (as 3x3 regiões em volta dele), porque achar o cais precisa olhar os tiles.
+#define STRUCT_SLOTS 2048  // hash por região; com metade cheia (1024 regiões vistas), recomeça do zero
+#define MAX_VILLAGES 200   // vilas com catálogo e encomenda; SHOP_VILLAGE + índice cabe num u8
+#define STRUCT_SEARCH 48   // o cais ou a pedra fica a até 48 células do centro da região
+#define VILLAGE_CHANCE 3   // 1 em 3 regiões de Mangue ou Arquipélago tem vila
+#define MERMAID_CHANCE 2   // 1 em 2 regiões de Recife tem pedra da sereia
+
+enum { STRUCT_NONE = 0, STRUCT_VILLAGE, STRUCT_MERMAID };
+
+typedef struct {
+    int16_t rx, ry;
+    uint8_t used, kind; // kind: STRUCT_*
+    int32_t x, y;       // cais da vila ou pedra da sereia
+    int16_t village;    // índice em g.villages (só vila)
+} structure_t;
 
 // Cais de uma vila: a célula de água colada na ilha onde o barco encosta.
 typedef struct {
@@ -317,8 +331,10 @@ static struct {
     safe_zone_t safe_zones[SAFE_ZONE_COUNT];
     stock_cell_t stock[STOCK_SLOTS]; // só as regiões pescadas (ver stock_find)
     int stock_used;
-    village_t villages[VILLAGE_COUNT];
-    int village_count; // quantas couberam no mapa (normalmente todas)
+    structure_t structures[STRUCT_SLOTS]; // o que tem em cada região já vista (ver struct_resolve)
+    int struct_used;
+    village_t villages[MAX_VILLAGES]; // as vilas já descobertas, na ordem em que apareceram
+    int village_count;
     uint32_t catalog_ends; // tick em que os mascates trocam o catálogo
     predator_t predators[MAX_PREDATORS];
     uint32_t next_shark; // tick em que pode nascer outro tubarão
@@ -413,14 +429,35 @@ static int at_dock(const player_t *p) {
 // Distância² em 64 bits: no mundo de 65536 células, dx² + dy² passa de 32 bits.
 static int64_t dist2(int dx, int dy) { return (int64_t)dx * dx + (int64_t)dy * dy; }
 
+// Na seção "estruturas", mais abaixo.
+static const structure_t *struct_get(int rx, int ry);
+static void struct_resolve_near(int x, int y);
+
+// Estrutura do tipo `kind` a até `reach` células (num quadrado) de (x, y).
+// Olha só as 3x3 regiões em volta, e só as já descobertas: perto dos barcos
+// elas sempre estão.
+static const structure_t *struct_near(int x, int y, int kind, int reach) {
+    int rx0 = world_region_of(x), ry0 = world_region_of(y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) {
+            const structure_t *s = struct_get(rx, ry);
+            if (s && s->kind == kind && s->x >= x - reach && s->x <= x + reach && s->y >= y - reach && s->y <= y + reach)
+                return s;
+        }
+    return 0;
+}
+
 static int in_safe_zone(int x, int y) {
     for (int i = 0; i < SAFE_ZONE_COUNT; i++) {
         const safe_zone_t *z = &g.safe_zones[i];
-        if (z->r <= 0) continue; // vila (ou forte) que não coube no mapa
+        if (z->r <= 0) continue; // forte que não coube no mapa
         int dx = x - z->x, dy = y - z->y;
         if (dist2(dx, dy) <= z->r * z->r) return 1;
     }
-    return 0;
+    const structure_t *s = struct_near(x, y, STRUCT_VILLAGE, VILLAGE_SAFE_R);
+    if (s && dist2(x - s->x, y - s->y) <= VILLAGE_SAFE_R * VILLAGE_SAFE_R) return 1;
+    s = struct_near(x, y, STRUCT_MERMAID, MERMAID_SAFE_R);
+    return s && dist2(x - s->x, y - s->y) <= MERMAID_SAFE_R * MERMAID_SAFE_R;
 }
 
 // Índice da vila em cujo cais o barco está, ou -1.
@@ -442,11 +479,7 @@ static int at_armory(const player_t *p) {
     return z->r > 0 && p->x >= z->x - 1 && p->x <= z->x + 1 && p->y >= z->y - 1 && p->y <= z->y + 1;
 }
 
-static int near_mermaid(const player_t *p) {
-    const safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
-    return p->x >= z->x - MERMAID_REACH && p->x <= z->x + MERMAID_REACH && p->y >= z->y - MERMAID_REACH &&
-           p->y <= z->y + MERMAID_REACH;
-}
+static int near_mermaid(const player_t *p) { return struct_near(p->x, p->y, STRUCT_MERMAID, MERMAID_REACH) != 0; }
 
 // Raiz quadrada inteira (arredonda para baixo).
 static uint32_t isqrt(uint32_t n) {
@@ -602,6 +635,8 @@ static void send_prices(int slot) {
 #define MARK_RANGE 1024
 #define MARK_SCHOOLS_MAX 120
 
+static int near(int x, int y, int ox, int oy, int extra); // na tela do barco (mais abaixo)
+
 static void send_marks_to(int slot) {
     const player_t *p = &g.players[slot];
     writer_t w = writer(out, sizeof out);
@@ -628,26 +663,27 @@ static void send_marks_to(int slot) {
         put_u8(&w, 0);
         n++;
     }
-    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].x);
-    put_u16(&w, (uint16_t)g.safe_zones[ZONE_MERMAID].y);
-    put_u8(&w, MARK_MERMAID);
-    put_u8(&w, 0);
-    n++;
+    // Forte, vilas e sereia só aparecem quando estão na tela do barco: o
+    // resto do mapa o jogador descobre navegando.
     const safe_zone_t *armory = &g.safe_zones[ZONE_ARMORY];
-    if (armory->r > 0) {
+    if (armory->r > 0 && near(armory->x, armory->y, p->x, p->y, 0)) {
         put_u16(&w, (uint16_t)armory->x);
         put_u16(&w, (uint16_t)armory->y);
         put_u8(&w, MARK_ARMORY);
         put_u8(&w, 0);
         n++;
     }
-    for (int i = 0; i < g.village_count; i++) {
-        put_u16(&w, (uint16_t)g.villages[i].x);
-        put_u16(&w, (uint16_t)g.villages[i].y);
-        put_u8(&w, MARK_VILLAGE);
-        put_u8(&w, g.villages[i].fav);
-        n++;
-    }
+    int rx0 = world_region_of(p->x), ry0 = world_region_of(p->y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) {
+            const structure_t *st = struct_get(rx, ry);
+            if (!st || st->kind == STRUCT_NONE || !near(st->x, st->y, p->x, p->y, 0)) continue;
+            put_u16(&w, (uint16_t)st->x);
+            put_u16(&w, (uint16_t)st->y);
+            put_u8(&w, st->kind == STRUCT_VILLAGE ? MARK_VILLAGE : MARK_MERMAID);
+            put_u8(&w, st->kind == STRUCT_VILLAGE ? g.villages[st->village].fav : 0);
+            n++;
+        }
     out[count_at] = n;
     send_w(slot, &w);
 }
@@ -1732,24 +1768,25 @@ static void event_all(uint8_t kind, uint8_t species, uint16_t count, uint32_t va
 // A célula está dentro do evento `kind`? Zona segura nunca está.
 // Catálogo novo nos mascates de todas as vilas: épicos de qualquer tipo
 // (menos as armas dos bosses), com encanto +1 ou +2.
-static void new_catalog(void) {
-    for (int i = 0; i < g.village_count; i++) {
-        village_t *v = &g.villages[i];
-        for (int k = 0; k < PEDDLER_ITEMS; k++) {
-            uint8_t base = (uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1));
-            v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
-            v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
-        }
-        // Encomenda: uma espécie que não está saturada no mercado.
-        uint8_t fresh[FISH_COUNT], n = 0;
-        for (int sp = 0; sp < FISH_COUNT; sp++)
-            if (price_cents(sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
-        uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
-        int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
-        v->quest_species = sp;
-        v->quest_count = (uint8_t)(count < QUEST_MIN ? QUEST_MIN : count > QUEST_MAX ? QUEST_MAX : count);
-        memset(v->quest_done, 0, sizeof v->quest_done);
+static void new_village_catalog(village_t *v) {
+    for (int k = 0; k < PEDDLER_ITEMS; k++) {
+        uint8_t base = (uint8_t)(1 + rnd_below(ITEM_DROP_COUNT - 1));
+        v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
+        v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
     }
+    // Encomenda: uma espécie que não está saturada no mercado.
+    uint8_t fresh[FISH_COUNT], n = 0;
+    for (int sp = 0; sp < FISH_COUNT; sp++)
+        if (price_cents(sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
+    uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
+    int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
+    v->quest_species = sp;
+    v->quest_count = (uint8_t)(count < QUEST_MIN ? QUEST_MIN : count > QUEST_MAX ? QUEST_MAX : count);
+    memset(v->quest_done, 0, sizeof v->quest_done);
+}
+
+static void new_catalog(void) {
+    for (int i = 0; i < g.village_count; i++) new_village_catalog(&g.villages[i]);
     g.catalog_ends = g.tick + CATALOG_TIME;
 }
 
@@ -2394,32 +2431,12 @@ static void join(int slot, const uint8_t *data, size_t len) {
         }
     }
     send_prices(slot);
+    struct_resolve_near(p->x, p->y);
     send_marks(slot);
     send_inventory(slot);
     send_boat(slot);
     send_rank(-1);
     send_event(slot, EV_WELCOME, FISH_NONE, 0, 0);
-}
-
-// A pedra da sereia: sempre no mesmo lugar para o mesmo mapa (sai da semente
-// do mapa, não do sorteio do servidor). Água em volta para dar para chegar.
-static void place_mermaid(void) {
-    safe_zone_t *z = &g.safe_zones[ZONE_MERMAID];
-    *z = (safe_zone_t){PORT_X + 16, PORT_Y, MERMAID_SAFE_R}; // se não achar lugar
-    for (int i = 0; i < 5000; i++) {
-        uint32_t h = world_hash(i, 0x5E7EA, g.seed);
-        int dx = (int)(h % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
-        int dy = (int)((h >> 16) % (2 * MERMAID_MAX_DIST + 1)) - MERMAID_MAX_DIST;
-        int d2 = dx * dx + dy * dy;
-        if (d2 < MERMAID_MIN_DIST * MERMAID_MIN_DIST || d2 > MERMAID_MAX_DIST * MERMAID_MAX_DIST) continue;
-        int water = 1;
-        for (int y = -2; y <= 2 && water; y++)
-            for (int x = -2; x <= 2 && water; x++) water = tile_is_water(tile(PORT_X + dx + x, PORT_Y + dy + y));
-        if (!water) continue;
-        z->x = PORT_X + dx;
-        z->y = PORT_Y + dy;
-        return;
-    }
 }
 
 // Um cais na costa: célula de água com terra colada (a ilha) e pelo menos 5
@@ -2437,28 +2454,86 @@ static int is_coast(int x, int y) {
     return land && water >= 5;
 }
 
-// Vilas: como a sereia, saem da semente do mapa, então ficam sempre no mesmo
-// lugar. O cais fica na costa de uma ilha.
-static void place_villages(void) {
-    g.village_count = 0;
-    for (int i = 0; i < 20000 && g.village_count < VILLAGE_COUNT; i++) {
-        uint32_t h = world_hash(i, 0x7111A, g.seed);
-        int x = PORT_X + (int)(h % (2 * VILLAGE_MAX_DIST + 1)) - VILLAGE_MAX_DIST;
-        int y = PORT_Y + (int)((h >> 16) % (2 * VILLAGE_MAX_DIST + 1)) - VILLAGE_MAX_DIST;
-        if (!far_from(x, y, PORT_X, PORT_Y, VILLAGE_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, VILLAGE_MAX_DIST + 1)) continue;
-        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
-        int ok = far_from(x, y, m->x, m->y, VILLAGE_SPACING);
-        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, VILLAGE_SPACING);
-        if (!ok || !is_coast(x, y)) continue;
-        village_t *v = &g.villages[g.village_count];
-        *v = (village_t){.x = x, .y = y, .fav = (uint8_t)((h >> 8) % FISH_COUNT)};
-        g.safe_zones[ZONE_VILLAGE + g.village_count] = (safe_zone_t){v->x, v->y, VILLAGE_SAFE_R};
-        g.village_count++;
+// --- estruturas ---------------------------------------------------------------
+
+// A pedra da sereia: água em volta (5x5) para dar para chegar.
+static int mermaid_spot(int x, int y) {
+    for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+            if (!tile_is_water(tile(x + dx, y + dy))) return 0;
+    return 1;
+}
+
+// Cais de vila: na costa e longe do forte do armeiro.
+static int village_spot(int x, int y) {
+    const safe_zone_t *a = &g.safe_zones[ZONE_ARMORY];
+    return is_coast(x, y) && (a->r <= 0 || far_from(x, y, a->x, a->y, ARMORY_SPACING));
+}
+
+// Sorteia (pela semente) até achar um lugar bom perto do centro da região.
+static int find_spot(int rx, int ry, uint32_t salt, int (*good)(int, int), int *ox, int *oy) {
+    for (int i = 0; i < 200; i++) {
+        uint32_t h = world_hash(rx * 256 + i, ry, g.seed ^ salt);
+        int x = rx * REGION_CELLS + (int)(h % (2 * STRUCT_SEARCH + 1)) - STRUCT_SEARCH;
+        int y = ry * REGION_CELLS + (int)((h >> 16) % (2 * STRUCT_SEARCH + 1)) - STRUCT_SEARCH;
+        if (good(x, y)) { *ox = x, *oy = y; return 1; }
+    }
+    return 0;
+}
+
+// Gaveta da região na tabela (hash com sondagem linear): a da região, ou a
+// vazia onde ela entraria.
+static structure_t *struct_slot(int rx, int ry) {
+    for (uint32_t i = world_hash(rx, ry, 0x57A7) & (STRUCT_SLOTS - 1);; i = (i + 1) & (STRUCT_SLOTS - 1)) {
+        structure_t *s = &g.structures[i];
+        if (!s->used || (s->rx == rx && s->ry == ry)) return s;
     }
 }
 
-// Forte do armeiro: também sai da semente do mapa. Vem depois das vilas para
-// ficar longe delas. Se não achar lugar, fica sem forte (r = 0).
+// Região já descoberta? NULL se ainda não.
+static const structure_t *struct_get(int rx, int ry) {
+    const structure_t *s = struct_slot(rx, ry);
+    return s->used ? s : 0;
+}
+
+// Descobre o que tem na região (só na primeira vez). Quando a tabela enche,
+// tudo recomeça: as estruturas voltam iguais (vêm da semente), só as vilas
+// ganham catálogo e encomenda novos.
+static void struct_resolve(int rx, int ry) {
+    if (rx < 0 || ry < 0 || rx >= REGIONS_W || ry >= REGIONS_H) return;
+    structure_t *s = struct_slot(rx, ry);
+    if (s->used) return;
+    if (g.struct_used >= STRUCT_SLOTS / 2 || g.village_count >= MAX_VILLAGES) {
+        memset(g.structures, 0, sizeof g.structures);
+        g.struct_used = g.village_count = 0;
+        s = struct_slot(rx, ry);
+    }
+    *s = (structure_t){.rx = (int16_t)rx, .ry = (int16_t)ry, .used = 1, .kind = STRUCT_NONE, .village = -1};
+    g.struct_used++;
+    if (rx == PORT_RX && ry == PORT_RY) return; // a região do porto já tem o porto
+    biome_t b = world_region_biome(rx, ry, g.seed);
+    uint32_t h = world_hash(rx, ry, g.seed ^ 0x57A0C);
+    int x, y;
+    if ((b == BIOME_ISLANDS || b == BIOME_MANGROVE) && h % VILLAGE_CHANCE == 0 &&
+        find_spot(rx, ry, 0x7111A, village_spot, &x, &y)) {
+        village_t *v = &g.villages[g.village_count];
+        *v = (village_t){.x = x, .y = y, .fav = (uint8_t)((h >> 8) % FISH_COUNT)};
+        new_village_catalog(v);
+        s->kind = STRUCT_VILLAGE, s->x = x, s->y = y, s->village = (int16_t)g.village_count++;
+    } else if (b == BIOME_REEF && h % MERMAID_CHANCE == 0 && find_spot(rx, ry, 0x5E7EA, mermaid_spot, &x, &y)) {
+        s->kind = STRUCT_MERMAID, s->x = x, s->y = y;
+    }
+}
+
+// Descobre as 3x3 regiões em volta de (x, y).
+static void struct_resolve_near(int x, int y) {
+    int rx0 = world_region_of(x), ry0 = world_region_of(y);
+    for (int ry = ry0 - 1; ry <= ry0 + 1; ry++)
+        for (int rx = rx0 - 1; rx <= rx0 + 1; rx++) struct_resolve(rx, ry);
+}
+
+// Forte do armeiro: um só, numa ilha perto do porto, longe das vilas e da
+// sereia. Vem da semente do mapa. Se não achar lugar, fica sem forte (r = 0).
 static void place_armory(void) {
     safe_zone_t *z = &g.safe_zones[ZONE_ARMORY];
     *z = (safe_zone_t){0, 0, 0};
@@ -2467,10 +2542,8 @@ static void place_armory(void) {
         int x = PORT_X + (int)(h % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
         int y = PORT_Y + (int)((h >> 16) % (2 * ARMORY_MAX_DIST + 1)) - ARMORY_MAX_DIST;
         if (!far_from(x, y, PORT_X, PORT_Y, ARMORY_MIN_DIST) || far_from(x, y, PORT_X, PORT_Y, ARMORY_MAX_DIST + 1)) continue;
-        const safe_zone_t *m = &g.safe_zones[ZONE_MERMAID];
-        int ok = far_from(x, y, m->x, m->y, ARMORY_SPACING);
-        for (int v = 0; v < g.village_count && ok; v++) ok = far_from(x, y, g.villages[v].x, g.villages[v].y, ARMORY_SPACING);
-        if (!ok || !is_coast(x, y)) continue;
+        if (struct_near(x, y, STRUCT_VILLAGE, ARMORY_SPACING) || struct_near(x, y, STRUCT_MERMAID, ARMORY_SPACING)) continue;
+        if (!is_coast(x, y)) continue;
         *z = (safe_zone_t){x, y, ARMORY_SAFE_R};
         return;
     }
@@ -2487,8 +2560,10 @@ void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     for (int i = 0; i < PROBE_COUNT; i++)
         g.probe_sum[i] = world_region_checksum(PORT_RX + PROBES[i][0], PORT_RY + PROBES[i][1], seed);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
-    place_mermaid();
-    place_villages();
+    // As 5x5 regiões em volta do porto já nascem descobertas: o forte precisa
+    // saber onde ficam as vilas e a sereia de perto para não cair em cima.
+    for (int ry = PORT_RY - 2; ry <= PORT_RY + 2; ry++)
+        for (int rx = PORT_RX - 2; rx <= PORT_RX + 2; rx++) struct_resolve(rx, ry);
     place_armory();
     new_catalog();
     storage_load_all(g.profiles, MAX_PROFILES);
@@ -2601,6 +2676,8 @@ void game_tick(void) {
         if (g.players[i].state == SLOT_PLAYING) send_state(i);
 
     if (g.tick % TICK_HZ == 0) {
+        for (int i = 0; i < MAX_PLAYERS; i++) // vilas e sereias perto de cada barco
+            if (g.players[i].state == SLOT_PLAYING) struct_resolve_near(g.players[i].x, g.players[i].y);
         for (int i = 0; i < FISH_COUNT; i++) g.pressure[i] = g.pressure[i] * 99 / 100;
         send_prices(-1);
         send_marks(-1);

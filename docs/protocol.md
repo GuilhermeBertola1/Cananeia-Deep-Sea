@@ -258,7 +258,7 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 
 ### Marcas do minimapa (`S_MARKS`)
 
-Cada barco recebe só os cardumes a até 1024 células dele (no máximo 120). Bags, coroas e lugares vão sempre.
+Cada barco recebe só os cardumes a até 1024 células dele (no máximo 120). Bags e coroas vão sempre. Forte, vilas e pedras da sereia só vão quando estão na tela do barco (até 50 células): o resto do mapa se descobre navegando. Vilas ficam em 1 de cada 3 regiões de Mangue ou Arquipélago, e a sereia em 1 de cada 2 regiões de Recife; o porto o cliente desenha sempre.
 
 | Tipo | Extra |
 | --- | --- |
