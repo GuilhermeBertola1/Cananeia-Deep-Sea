@@ -332,3 +332,5 @@ O mapa **não** vai pela rede: os dois lados geram o mesmo oceano a partir da se
 | 6 | Polvo | $10 | fundo |
 | 7 | Peixe-espada | $15 | fundo |
 | 8 | Lula-gigante | $40 | fundo |
+
+A coluna "Bioma" é o tipo de água onde a espécie vive. O bioma da região do mapa (Baía, Mangue, Arquipélago, Mar aberto, Recife, Abismo) muda as chances: no Mangue sai mais camarão e caranguejo, no Recife mais polvo e tartaruga, no Mar aberto mais atum, no Abismo mais lula-gigante (tabela `BIOME_PCT` em `fish.c`). O bioma também decide quantos cardumes e tubarões ficam em volta do barco.

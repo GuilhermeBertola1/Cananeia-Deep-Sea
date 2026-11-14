@@ -8,12 +8,12 @@ import "core:strings"
 import rl "vendor:raylib"
 
 MAX_PLAYERS :: 8
-MAX_SCHOOLS :: 240
+MAX_SCHOOLS :: 288
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
 MAX_MARKS :: 157 // cardumes (até 120 perto do barco) + bags e coroas (32) + a sereia + o forte + 3 vilas
 PEDDLER_ITEMS :: 2
-MAX_PREDATORS :: 44
+MAX_PREDATORS :: 68
 LOOT_SLOTS :: 4
 CROWN_BOUNTY_CENTS :: 2500 // o mercenário paga $25 por coroa
 LOG_SIZE :: 6

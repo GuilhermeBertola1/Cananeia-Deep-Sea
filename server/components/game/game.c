@@ -9,7 +9,7 @@
 #include "boat.h"
 #include "weapon.h"
 
-#define MAX_SCHOOLS 240 // 30 por barco, com 8 barcos espalhados
+#define MAX_SCHOOLS 288 // até 36 por barco (no Recife), com 8 barcos espalhados
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
 #define SCHOOL_CATCH_PCT 35 // chance por tick dentro do cardume
 #define BASE_SPEED 5 // células por segundo
@@ -67,8 +67,7 @@
 
 // Tubarões: rondam o mar fundo e caçam barcos fracos. Não entram no raso
 // nem nas zonas seguras, então a costa é um refúgio.
-#define MAX_PREDATORS 44          // 5 tubarões por barco com 8 barcos, mais o navio fantasma
-#define SHARKS_PER_BOAT 5         // quantos tubarões o mar tenta manter em volta de cada barco
+#define MAX_PREDATORS 68          // até 8 tubarões por barco (no Abismo) com 8 barcos, mais o navio fantasma
 #define SHARK_RESPAWN (15 * TICK_HZ) // a cada 15 s, um tubarão novo em cada barco que tiver menos
 #define SHARK_HP 40
 #define SHARK_BITE 8              // dano de cada mordida
@@ -162,8 +161,6 @@ static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
 // um estoque de peixe. Pescar tira do estoque, e com menos peixe a chance de
 // pescar ali cai junto. O estoque volta sozinho com o tempo.
 #define REGION_SIZE 32
-#define REGIONS_X (MAP_W / REGION_SIZE)
-#define REGIONS_Y (MAP_H / REGION_SIZE)
 #define STOCK_MAX 250                   // cabe num uint8_t
 #define STOCK_REGEN_EVERY (5 * TICK_HZ) // a cada 5 s as regiões crescem
 #define STOCK_GROWTH 2500               // maior = cresce mais devagar
@@ -299,6 +296,14 @@ typedef struct {
 #define PROBE_COUNT 8
 static const int8_t PROBES[PROBE_COUNT][2] = {{0, 0}, {1, 0}, {0, -1}, {-2, 2}, {3, -3}, {-7, 5}, {12, 9}, {-40, -25}};
 
+// Estoque esparso: a tabela só guarda as regiões de 32x32 que alguém pescou e
+// que ainda não encheram de novo. Região fora da tabela está cheia.
+#define STOCK_SLOTS 8192 // potência de 2; fica no máximo meio cheia (4096 regiões)
+typedef struct {
+    int16_t rx, ry; // região (célula / REGION_SIZE): até 2048, cabe em int16
+    uint8_t used, stock;
+} stock_cell_t;
+
 static struct {
     uint32_t seed, tick, rng;
     uint32_t probe_sum[PROBE_COUNT]; // checksum das regiões de teste, para o cliente conferir
@@ -310,7 +315,8 @@ static struct {
     profile_t profiles[MAX_PROFILES];
     uint32_t pressure[FISH_COUNT];
     safe_zone_t safe_zones[SAFE_ZONE_COUNT];
-    uint8_t stock[REGIONS_X * REGIONS_Y]; // peixes em cada região (0 a STOCK_MAX)
+    stock_cell_t stock[STOCK_SLOTS]; // só as regiões pescadas (ver stock_find)
+    int stock_used;
     village_t villages[VILLAGE_COUNT];
     int village_count; // quantas couberam no mapa (normalmente todas)
     uint32_t catalog_ends; // tick em que os mascates trocam o catálogo
@@ -341,17 +347,46 @@ static int chance_permille(uint32_t pm) { return rnd_below(1000) < pm; }
 
 static tile_t tile(int32_t x, int32_t y) { return chunks_tile(x, y); }
 
-// Estoque da região onde fica a célula (x, y).
-static uint8_t *stock_at(int x, int y) {
+// Procura a região (rx, ry) na tabela de estoque (hash com sondagem linear).
+// Se não achar e `create` for 1, entra com o estoque cheio. Devolve NULL se
+// não achou (e não criou) ou se a tabela já está meio cheia: aí a região fica
+// cheia para sempre até a próxima limpeza, o que só acontece com milhares de
+// regiões pescadas ao mesmo tempo.
+static stock_cell_t *stock_slot(int rx, int ry, int create) {
+    for (uint32_t i = world_hash(rx, ry, 0x570C) & (STOCK_SLOTS - 1);; i = (i + 1) & (STOCK_SLOTS - 1)) {
+        stock_cell_t *c = &g.stock[i];
+        if (!c->used) {
+            if (!create || g.stock_used >= STOCK_SLOTS / 2) return NULL;
+            *c = (stock_cell_t){(int16_t)rx, (int16_t)ry, 1, STOCK_MAX};
+            g.stock_used++;
+            return c;
+        }
+        if (c->rx == rx && c->ry == ry) return c;
+    }
+}
+
+// A região da célula (x, y) na tabela.
+static stock_cell_t *stock_find(int x, int y, int create) {
     x = x < 0 ? 0 : x >= MAP_W ? MAP_W - 1 : x;
     y = y < 0 ? 0 : y >= MAP_H ? MAP_H - 1 : y;
-    return &g.stock[(y / REGION_SIZE) * REGIONS_X + x / REGION_SIZE];
+    return stock_slot(x / REGION_SIZE, y / REGION_SIZE, create);
+}
+
+// Estoque da região onde fica a célula (x, y): fora da tabela = cheia.
+static int stock_get(int x, int y) {
+    const stock_cell_t *c = stock_find(x, y, 0);
+    return c ? c->stock : STOCK_MAX;
 }
 
 // Chance de pescar (por mil) ajustada pelo estoque: região cheia = chance
 // inteira, região pela metade = metade da chance, região vazia = nada.
 static uint32_t with_stock(uint32_t permille, int x, int y) {
-    return permille * *stock_at(x, y) / STOCK_MAX;
+    return permille * (uint32_t)stock_get(x, y) / STOCK_MAX;
+}
+
+// Bioma da região onde fica a célula (x, y).
+static biome_t biome_at(int x, int y) {
+    return world_region_biome(world_region_of(x), world_region_of(y), g.seed);
 }
 
 static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
@@ -438,11 +473,12 @@ static int far_from(int x, int y, int ox, int oy, int dist) {
 
 // O mundo é enorme, mas só tem vida perto dos barcos. Cada barco tem uma
 // "bolha" em volta (SPAWN_RANGE para cada lado), e o servidor mantém nela
-// SCHOOLS_PER_BOAT cardumes e SHARKS_PER_BOAT tubarões. O que já está na
-// bolha conta para todos os barcos que estão ali: barcos juntos dividem os
-// bichos em vez de encher o mar. Assim só a parte perto dos barcos vira chunk.
+// cardumes e tubarões conforme o bioma (BIOME_SCHOOL_PCT e BIOME_SHARKS).
+// O que já está na bolha conta para todos os barcos que estão ali: barcos
+// juntos dividem os bichos em vez de encher o mar. Assim só a parte perto
+// dos barcos vira chunk.
 #define SPAWN_RANGE 256
-#define SCHOOLS_PER_BOAT 30
+#define SCHOOLS_PER_BOAT 30 // no bioma "normal" (100%); a tabela abaixo muda por bioma
 // Tubarão e cardume que ficam mais longe que isso de todos os barcos somem,
 // e a vaga volta a nascer perto de alguém.
 #define DESPAWN_RANGE 512
@@ -470,6 +506,17 @@ static void random_cell(int *x, int *y) {
     }
     cell_near(cx, cy, x, y);
 }
+
+// Quanto cada bioma tem de vida, olhando o bioma onde o barco está:
+// cardumes em % de SCHOOLS_PER_BOAT, e tubarões por bolha.
+static const uint8_t BIOME_SCHOOL_PCT[BIOME_COUNT] = {
+    [BIOME_BAY] = 90, [BIOME_MANGROVE] = 110, [BIOME_ISLANDS] = 100,
+    [BIOME_OPEN] = 80, [BIOME_REEF] = 120, [BIOME_ABYSS] = 50,
+};
+static const uint8_t BIOME_SHARKS[BIOME_COUNT] = {
+    [BIOME_BAY] = 2, [BIOME_MANGROVE] = 3, [BIOME_ISLANDS] = 4,
+    [BIOME_OPEN] = 6, [BIOME_REEF] = 5, [BIOME_ABYSS] = 8,
+};
 
 // (x, y) está na bolha do barco?
 static int in_bubble(const player_t *p, int x, int y) {
@@ -789,7 +836,7 @@ static void send_state(int slot) {
     out[count_at] = n;
 
     // Desde a v7: estoque de peixe da região, bichos por perto e o evento do mundo.
-    put_u8(&w, (uint8_t)(*stock_at(p->x, p->y) * 100 / STOCK_MAX));
+    put_u8(&w, (uint8_t)(stock_get(p->x, p->y) * 100 / STOCK_MAX));
     count_at = w.len;
     put_u8(&w, 0);
     n = 0;
@@ -930,11 +977,12 @@ static void add_fish(int slot, uint8_t species, int n) {
         return;
     }
     // Não dá para pescar mais peixe do que a região tem.
-    uint8_t *stock = stock_at(p->x, p->y);
+    stock_cell_t *c = stock_find(p->x, p->y, 1);
+    int stock = c ? c->stock : STOCK_MAX;
     int got = n < room ? n : room;
-    if (got > *stock) got = *stock;
+    if (got > stock) got = stock;
     if (got <= 0) return;
-    *stock = (uint8_t)(*stock - got);
+    if (c) c->stock = (uint8_t)(stock - got);
     prof(p)->hold[species] += got;
     send_event(slot, EV_CATCH, species, (uint16_t)got, 0);
     int luck = p->stats[STAT_LUCK] > 0 ? p->stats[STAT_LUCK] : 0;
@@ -1657,7 +1705,8 @@ static void update_predators(void) {
             bite(pd->target, pd);
         }
     }
-    // A cada SHARK_RESPAWN, cada barco com menos de SHARKS_PER_BOAT tubarões na bolha ganha mais um.
+    // A cada SHARK_RESPAWN, cada barco com menos tubarões na bolha do que o
+    // bioma dele pede (BIOME_SHARKS) ganha mais um.
     if (g.tick >= g.next_shark) {
         g.next_shark = g.tick + SHARK_RESPAWN;
         for (int t = 0; t < MAX_PLAYERS; t++) {
@@ -1668,7 +1717,7 @@ static void update_predators(void) {
                 const predator_t *pd = &g.predators[i];
                 n += pd->alive && pd->kind == PRED_SHARK && in_bubble(p, pd->x, pd->y);
             }
-            if (n < SHARKS_PER_BOAT) spawn_shark(p);
+            if (n < BIOME_SHARKS[biome_at(p->x, p->y)]) spawn_shark(p);
         }
     }
 }
@@ -1741,7 +1790,8 @@ static void squid_tide(void) {
         if (!in_event(WORLD_SQUID, x, y) || tile(x, y) != TILE_DEEP) continue;
         g.schools[made++] = (school_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .r = (uint8_t)(3 + rnd_below(3)),
                                        .species = FISH_LULA, .expires = g.event.ends};
-        *stock_at(x, y) = STOCK_MAX;
+        stock_cell_t *c = stock_find(x, y, 0);
+        if (c) c->stock = STOCK_MAX;
     }
     send_marks(-1);
 }
@@ -2151,7 +2201,7 @@ static void update_player(int slot) {
     if (in_storm) passive = passive * STORM_CATCH_PCT / 100, school = school * STORM_CATCH_PCT / 100;
     if (g.weather.kind == WEATHER_RAIN) passive = passive * RAIN_CATCH_PCT / 100, school = school * RAIN_CATCH_PCT / 100;
     if (moved && chance_permille(with_stock(passive, p->x, p->y))) {
-        uint8_t sp = fish_roll(tile(p->x, p->y), rnd());
+        uint8_t sp = fish_roll(tile(p->x, p->y), biome_at(p->x, p->y), rnd());
         if (sp != FISH_NONE) add_fish(slot, sp, 1);
     }
     for (int i = 0; i < MAX_SCHOOLS; i++) {
@@ -2167,19 +2217,19 @@ static void update_schools(void) {
         school_t *s = &g.schools[i];
         // O cardume vai embora no fim da vida ou quando a região fica sem peixe.
         // Também some quando fica longe de todos os barcos, para nascer perto de alguém.
-        if (s->alive && (s->expires <= g.tick || *stock_at(s->x, s->y) < SCHOOL_MIN_STOCK)) s->alive = 0;
+        if (s->alive && (s->expires <= g.tick || stock_get(s->x, s->y) < SCHOOL_MIN_STOCK)) s->alive = 0;
         if (s->alive && g.tick % TICK_HZ == 0 && far_from_boats(s->x, s->y)) s->alive = 0;
     }
-    // Completa a bolha de cada barco até SCHOOLS_PER_BOAT. Nada de cardume
+    // Completa a bolha de cada barco até a meta do bioma dele. Nada de cardume
     // colado no porto: precisa sair para buscar. E ele nasce mais onde tem
     // mais peixe: numa região com 40% do estoque, só 40% das tentativas valem.
     int free_i = 0;
     for (int t = 0; t < MAX_PLAYERS; t++) {
         const player_t *p = &g.players[t];
         if (p->state != SLOT_PLAYING) continue;
-        int have = 0;
+        int have = 0, want = SCHOOLS_PER_BOAT * BIOME_SCHOOL_PCT[biome_at(p->x, p->y)] / 100;
         for (int i = 0; i < MAX_SCHOOLS; i++) have += g.schools[i].alive && in_bubble(p, g.schools[i].x, g.schools[i].y);
-        for (int attempts = 300; have < SCHOOLS_PER_BOAT && attempts > 0; attempts--) {
+        for (int attempts = 300; have < want && attempts > 0; attempts--) {
             while (free_i < MAX_SCHOOLS && g.schools[free_i].alive) free_i++;
             if (free_i == MAX_SCHOOLS) break; // sem vaga
             int x, y;
@@ -2187,13 +2237,13 @@ static void update_schools(void) {
             int dx = x - PORT_X, dy = y - PORT_Y;
             tile_t t = tile(x, y);
             if (!tile_is_water(t) || dist2(dx, dy) < 30 * 30) continue;
-            if (rnd_below(STOCK_MAX) >= *stock_at(x, y)) continue;
+            if (rnd_below(STOCK_MAX) >= (uint32_t)stock_get(x, y)) continue;
             g.schools[free_i] = (school_t){
                 .alive = 1,
                 .x = (uint16_t)x,
                 .y = (uint16_t)y,
                 .r = (uint8_t)(2 + rnd_below(4)),
-                .species = fish_roll(t, rnd()),
+                .species = fish_roll(t, biome_at(x, y), rnd()),
                 .expires = g.tick + 600 + rnd_below(1200), // 1 a 3 minutos
             };
             have++;
@@ -2214,12 +2264,20 @@ static void update_schools(void) {
 // Crescimento logístico: devagar com pouco peixe (poucos para se reproduzir),
 // rápido no meio e devagar de novo perto do máximo. O +1 garante que até uma
 // região vazia volta.
+// A tabela é refeita só com as regiões que ainda não encheram: as cheias
+// saem, e assim ela não cresce à toa.
 static void regen_stock(void) {
-    for (int i = 0; i < REGIONS_X * REGIONS_Y; i++) {
-        int s = g.stock[i];
-        if (s >= STOCK_MAX) continue;
+    static stock_cell_t old[STOCK_SLOTS];
+    memcpy(old, g.stock, sizeof old);
+    memset(g.stock, 0, sizeof g.stock);
+    g.stock_used = 0;
+    for (int i = 0; i < STOCK_SLOTS; i++) {
+        if (!old[i].used) continue;
+        int s = old[i].stock;
         s += 1 + s * (STOCK_MAX - s) / STOCK_GROWTH;
-        g.stock[i] = (uint8_t)(s > STOCK_MAX ? STOCK_MAX : s);
+        if (s >= STOCK_MAX) continue;
+        stock_cell_t *c = stock_slot(old[i].rx, old[i].ry, 1);
+        if (c) c->stock = (uint8_t)s;
     }
 }
 
@@ -2433,7 +2491,6 @@ void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     place_villages();
     place_armory();
     new_catalog();
-    memset(g.stock, STOCK_MAX, sizeof g.stock); // o mar começa cheio
     storage_load_all(g.profiles, MAX_PROFILES);
     update_schools();
     g.next_event = EVENT_FIRST + rnd_below(EVENT_FIRST);
