@@ -47,7 +47,7 @@ Código: `server/components/game/include/protocol.h` (servidor) e `client/src/pr
 | `0x85` | `S_EVENT` | pesca, venda... | `u8` tipo, `u8` espécie, `u16` quantidade, `u32` valor |
 | `0x86` | `S_RANK` | a cada 5 s e após vendas | `u8` n, n × (`u32` dinheiro, `u8` online, `nome`) |
 | `0x87` | `S_MARKS` | a cada 1 s e quando um saque cai ou some | `u8` n, n × (`u16` x, `u16` y, `u8` tipo, `u8` extra) — pontos do minimapa |
-| `0x88` | `S_PRICES` | a cada 1 s e após vendas | `u16` preço em centavos de cada espécie (9) |
+| `0x88` | `S_PRICES` | a cada 1 s, após vendas e quando o balcão mais perto muda | `u8` balcão (0 = porto, 1 + v = vila v), `u16` preço em centavos de cada espécie (9). Cada jogador recebe os preços do balcão mais perto dele (ver "Mercado" abaixo) |
 | `0x89` | `S_INVENTORY` | ao entrar e quando a bolsa muda | ver abaixo |
 | `0x8A` | `S_BOAT` | ao entrar e depois de um upgrade | `u8` nível da vela, `u8` do casco, `u8` do leme (0 a 4) |
 | `0x8B` | `S_CATALOG` | a cada 1 s para quem está no cais de uma vila, e logo depois de uma compra, entrega ou troca | ver abaixo |
@@ -273,11 +273,19 @@ Cada barco recebe só os cardumes a até 1024 células dele (no máximo 120). Ba
 
 Bosses e outros NPCs entram aqui como tipos novos.
 
+### Mercado
+
+- Cada balcão de venda tem o seu mercado: o do porto é o balcão 0 e a vila `v` é o balcão `1 + v`. Vender no porto não mexe direto no preço da vila, e vice-versa.
+- **Procura**: cada balcão paga de 70% a 150% do preço base de cada espécie. Começa em 100%, menos 20% se a espécie sobra no bioma do balcão (a sardinha na Baía, o camarão no Mangue), mais 20% se ela é rara ali, e mais ou menos até 10% pela semente. A cada 10 min a procura anda até 5% para um lado, sem se afastar mais de 15% da inicial.
+- **Pressão**: vender 200 peixes de uma espécie num balcão derruba o preço dela ali pela metade (nunca abaixo de 30%). A pressão cai 1% por segundo.
+- **Difusão**: a cada 5 s, cada par de balcões a menos de 512 células (a maior distância entre `|dx|` e `|dy|`) troca 1% da diferença de pressão, menos quanto mais longe. O que sai de um entra no outro, então despejar peixe numa vila derruba um pouco o preço das vilas vizinhas, mas não o do mar todo.
+- O preço da vila para a espécie favorita dela leva mais 25% por cima de tudo isso.
+
 ### Comércio: armeiro e mascates
 
 - **Forte do armeiro** (na costa de uma ilha, 40 a 90 células do porto, longe da sereia e das vilas, sempre no mesmo lugar para a mesma semente; zona segura de 8 células): vende as armas comuns com a raridade garantida (afixos e números sorteados). Ofertas: 0 Arpão comum $40, 1 Arpão raro $400, 2 Mosquete comum $120, 3 Mosquete raro $1.000, 4 Canhão leve comum $300, 5 Canhão leve raro $2.400. Só cobra se couber na bolsa.
 - **Mascate** (no cais de cada vila): 2 itens épicos de qualquer tipo (menos as armas dos bosses), já com encanto +1 ou +2, a $40.000 mais $15.000 por nível de encanto. Uma unidade de cada: quem comprar primeiro leva, e o item fica vendido até a troca.
-- **Encomenda** (também no mascate): N peixes de uma espécie que está a 80% ou mais do preço cheio no mercado, uns $300 em peixe (de 5 a 50). Paga o dobro do preço do mercado **na hora da entrega**, mais um baú, e a entrega pesa no mercado como uma venda. Cada perfil entrega uma vez por catálogo.
+- **Encomenda** (também no mascate): N peixes de uma espécie que está a 80% ou mais do preço cheio no balcão da vila, uns $300 em peixe (de 5 a 50). Paga o dobro do preço do balcão da vila **na hora da entrega**, mais um baú, e a entrega pesa nesse balcão como uma venda. Cada perfil entrega uma vez por catálogo.
 - O catálogo de todas as vilas troca junto a cada 30 min. Ele não é salvo: o servidor que reinicia sorteia um novo.
 
 ### Ecossistema e eventos do mundo

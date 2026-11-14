@@ -38,7 +38,7 @@ enum {
     S_EVENT = 0x85,   // u8 tipo (EV_*), u8 espécie, u16 qtd, u32 valor
     S_RANK = 0x86,    // u8 n, n x {u32 dinheiro, u8 online, u8 len, nome[len]}
     S_MARKS = 0x87,   // u8 n, n x {u16 x, u16 y, u8 tipo (MARK_*), u8 extra}
-    S_PRICES = 0x88,  // u16 centavos[FISH_COUNT]
+    S_PRICES = 0x88,  // u8 balcão (0 = porto, 1 + v = vila v), u16 centavos[FISH_COUNT]
     S_INVENTORY = 0x89,
     S_BOAT = 0x8A,
     S_CATALOG = 0x8B, // catálogo do mascate da vila onde o barco está

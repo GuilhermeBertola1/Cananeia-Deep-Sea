@@ -146,10 +146,27 @@
 // dois comuns já dão um raro.
 static const uint32_t COMBINE_PRICE[RARITY_COUNT] = {0, 8000, 25000, 60000};
 
-// Mercado: vender 200 de uma espécie derruba o preço pela metade,
-// nunca abaixo de 30%, e a pressão cai 1% por segundo.
+// Mercado: cada balcão (o porto e cada vila) tem o seu. Vender 200 de uma
+// espécie num balcão derruba o preço dele pela metade, nunca abaixo de 30%,
+// e a pressão cai 1% por segundo. A pressão também escorre para os balcões
+// vizinhos (ver market_diffuse), então despejar peixe numa vila respinga nas
+// de perto, mas não no mar todo.
 #define MARKET_SATURATION 200000 // em milésimos de peixe
 #define MARKET_MIN_PCT 30
+// Procura: quanto o balcão quer de cada espécie, em % do preço base. Peixe
+// que sobra no bioma do balcão vale menos ali, peixe raro ali vale mais.
+#define DEMAND_MIN 70
+#define DEMAND_MAX 150
+#define DEMAND_BIOME 20                    // +-20% pelo bioma
+#define DEMAND_NOISE 10                    // +-10% de cada balcão (semente)
+#define DEMAND_DRIFT 5                     // a cada troca, anda até +-5%
+#define DEMAND_DRIFT_MAX 15                // e nunca se afasta mais que 15% do inicial
+#define DEMAND_DRIFT_EVERY (600 * TICK_HZ) // 10 min
+// Difusão: a cada 5 s, cada par de balcões a menos de 512 células troca 1% da
+// diferença de pressão, menos quanto mais longe.
+#define DIFFUSE_EVERY (5 * TICK_HZ)
+#define DIFFUSE_RANGE 512
+#define DIFFUSE_PCT 1
 
 // Ecossistema: o mar é dividido em regiões de 32x32 células, e cada uma tem
 // um estoque de peixe. Pescar tira do estoque, e com menos peixe a chance de
@@ -179,6 +196,7 @@ typedef struct {
     uint32_t next_spin; // tick em que a roleta da sereia libera de novo
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
+    int16_t market; // balcão dos preços que o jogador recebeu por último (ver market_near)
 } player_t;
 
 typedef struct {
@@ -283,6 +301,13 @@ enum { ZONE_PORT = 0, ZONE_ARMORY, SAFE_ZONE_COUNT };
 
 enum { STRUCT_NONE = 0, STRUCT_VILLAGE, STRUCT_MERMAID };
 
+// Um balcão de venda: o do porto ou o de uma vila.
+typedef struct {
+    uint32_t pressure[FISH_COUNT]; // milésimos de peixe vendidos ali, caindo com o tempo
+    uint8_t demand[FISH_COUNT];    // procura agora, em %
+    uint8_t base[FISH_COUNT];      // procura inicial: a deriva fica perto dela
+} market_t;
+
 typedef struct {
     int16_t rx, ry;
     uint8_t used, kind; // kind: STRUCT_*
@@ -294,6 +319,7 @@ typedef struct {
 typedef struct {
     int32_t x, y;
     uint8_t fav; // espécie que ela paga mais caro
+    market_t market;
     // Catálogo do mascate. Vendido: base = ITEM_NONE até a próxima troca.
     item_t offer[PEDDLER_ITEMS];
     uint8_t offer_enchant[PEDDLER_ITEMS];
@@ -327,7 +353,7 @@ static struct {
     shot_t shots[MAX_SHOTS];
     drop_t drops[MAX_DROPS];
     profile_t profiles[MAX_PROFILES];
-    uint32_t pressure[FISH_COUNT];
+    market_t port_market; // balcão 0; a vila v é o balcão 1 + v
     safe_zone_t safe_zones[SAFE_ZONE_COUNT];
     stock_cell_t stock[STOCK_SLOTS]; // só as regiões pescadas (ver stock_find)
     int stock_used;
@@ -571,11 +597,97 @@ static int far_from_boats(int x, int y) {
 // Célula onde o tiro está (arredonda para a mais perto).
 static int shot_cell(int32_t v) { return (v + SUB / 2) / SUB; }
 
-static uint32_t price_cents(int sp) {
-    uint32_t base = SPECIES[sp].price_cents;
-    uint32_t p = (uint32_t)((uint64_t)base * MARKET_SATURATION / (MARKET_SATURATION + g.pressure[sp]));
+// --- mercado ----------------------------------------------------------------
+
+// Balcão `id`: 0 é o porto, 1 + v é a vila v.
+static market_t *market_get(int id) { return id == 0 ? &g.port_market : &g.villages[id - 1].market; }
+static int market_count(void) { return 1 + g.village_count; }
+
+static void market_pos(int id, int *x, int *y) {
+    if (id == 0) *x = DOCK_X, *y = DOCK_Y;
+    else *x = g.villages[id - 1].x, *y = g.villages[id - 1].y;
+}
+
+static int clamp_int(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Distância "em quadrado": o maior entre |dx| e |dy|.
+static int cheb(int dx, int dy) { return iabs(dx) > iabs(dy) ? iabs(dx) : iabs(dy); }
+
+// Procura inicial: pelo bioma de onde o balcão fica, mais um tanto da semente
+// (dois balcões no mesmo bioma não pagam igual).
+static void market_init(market_t *m, int x, int y, biome_t biome) {
+    *m = (market_t){0};
+    for (int sp = 0; sp < FISH_COUNT; sp++) {
+        uint16_t pct = fish_biome_pct(sp, biome);
+        int d = 100 + (pct > 100 ? -DEMAND_BIOME : pct < 100 ? DEMAND_BIOME : 0);
+        d += (int)(world_hash(x, y + sp, g.seed ^ 0xDE3A0) % (2 * DEMAND_NOISE + 1)) - DEMAND_NOISE;
+        m->base[sp] = m->demand[sp] = (uint8_t)clamp_int(d, DEMAND_MIN, DEMAND_MAX);
+    }
+}
+
+static uint32_t price_cents(const market_t *m, int sp) {
+    uint32_t base = (uint32_t)SPECIES[sp].price_cents * m->demand[sp] / 100;
+    uint32_t p = (uint32_t)((uint64_t)base * MARKET_SATURATION / (MARKET_SATURATION + m->pressure[sp]));
     uint32_t min = base * MARKET_MIN_PCT / 100;
     return p < min ? min : p;
+}
+
+// Balcão mais perto do barco (distância de Chebyshev). No cais de um balcão,
+// é ele mesmo.
+static int market_near(const player_t *p) {
+    int best = 0, best_d = INT32_MAX;
+    for (int id = 0; id < market_count(); id++) {
+        int x, y;
+        market_pos(id, &x, &y);
+        int d = cheb(p->x - x, p->y - y);
+        if (d < best_d) best_d = d, best = id;
+    }
+    return best;
+}
+
+// Vender: a pressão sobe no balcão.
+static void market_sold(market_t *m, int sp, uint32_t count) { m->pressure[sp] += count * 1000; }
+
+// A pressão escorre do balcão mais pressionado para o menos, entre vizinhos.
+// O que sai de um entra no outro, então a soma não muda (só o decaimento tira).
+static void market_diffuse(void) {
+    int n = market_count();
+    for (int a = 0; a < n; a++) {
+        int ax, ay;
+        market_pos(a, &ax, &ay);
+        for (int b = a + 1; b < n; b++) {
+            int bx, by;
+            market_pos(b, &bx, &by);
+            int d = cheb(ax - bx, ay - by);
+            if (d >= DIFFUSE_RANGE) continue;
+            market_t *ma = market_get(a), *mb = market_get(b);
+            for (int sp = 0; sp < FISH_COUNT; sp++) {
+                int64_t diff = (int64_t)ma->pressure[sp] - mb->pressure[sp];
+                int64_t flow = diff * DIFFUSE_PCT * (DIFFUSE_RANGE - d) / (100 * DIFFUSE_RANGE);
+                ma->pressure[sp] = (uint32_t)(ma->pressure[sp] - flow);
+                mb->pressure[sp] = (uint32_t)(mb->pressure[sp] + flow);
+            }
+        }
+    }
+}
+
+// A procura de cada balcão anda um pouco, sem sair de perto da inicial.
+static void market_drift(void) {
+    for (int id = 0; id < market_count(); id++) {
+        market_t *m = market_get(id);
+        for (int sp = 0; sp < FISH_COUNT; sp++) {
+            int d = m->demand[sp] + (int)rnd_below(2 * DEMAND_DRIFT + 1) - DEMAND_DRIFT;
+            d = clamp_int(d, m->base[sp] - DEMAND_DRIFT_MAX, m->base[sp] + DEMAND_DRIFT_MAX);
+            m->demand[sp] = (uint8_t)clamp_int(d, DEMAND_MIN, DEMAND_MAX);
+        }
+    }
+}
+
+static void market_decay(void) {
+    for (int id = 0; id < market_count(); id++) {
+        market_t *m = market_get(id);
+        for (int sp = 0; sp < FISH_COUNT; sp++) m->pressure[sp] = m->pressure[sp] * 99 / 100;
+    }
 }
 
 static int same_name(const char *a, const char *b) {
@@ -622,11 +734,22 @@ static void write_player_info(writer_t *w, int id) {
     put_name(w, prof(&g.players[id])->name);
 }
 
+// Preços do balcão mais perto do barco. Cada um recebe os seus.
 static void send_prices(int slot) {
+    if (slot < 0) {
+        for (int i = 0; i < MAX_PLAYERS; i++)
+            if (g.players[i].state == SLOT_PLAYING) send_prices(i);
+        return;
+    }
+    player_t *p = &g.players[slot];
+    int id = market_near(p);
+    const market_t *m = market_get(id);
+    p->market = (int16_t)id;
     writer_t w = writer(out, sizeof out);
     put_u8(&w, S_PRICES);
-    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, (uint16_t)price_cents(i));
-    slot < 0 ? send_all(&w) : send_w(slot, &w);
+    put_u8(&w, (uint8_t)id);
+    for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, (uint16_t)price_cents(m, i));
+    send_w(slot, &w);
 }
 
 // Pontos do minimapa de um barco. Cardumes só até MARK_RANGE dele (o mapa
@@ -1055,15 +1178,16 @@ static void sell(int slot, uint8_t species) {
     profile_t *pr = prof(p);
     int v = at_village(p);
     uint8_t fav = v >= 0 ? g.villages[v].fav : FISH_NONE;
+    market_t *m = market_get(v >= 0 ? 1 + v : 0);
     uint32_t total = 0, count = 0;
     for (int i = 0; i < FISH_COUNT; i++) {
         if (species != FISH_NONE && species != i) continue;
         uint32_t n = pr->hold[i];
         if (!n) continue;
-        uint32_t price = price_cents(i);
+        uint32_t price = price_cents(m, i);
         if (i == fav) price = price * (100 + VILLAGE_BONUS_PCT) / 100;
         total += price * n;
-        g.pressure[i] += n * 1000;
+        market_sold(m, i, n);
         count += n;
         pr->hold[i] = 0;
     }
@@ -1370,9 +1494,9 @@ static void deliver(int slot) {
     uint8_t sp = v->quest_species, bit = (uint8_t)(1 << (p->profile % 8));
     if (v->quest_done[p->profile / 8] & bit) { send_event(slot, EV_QUEST_WAIT, sp, 0, 0); return; }
     if (pr->hold[sp] < v->quest_count) { send_event(slot, EV_QUEST_MISSING, sp, v->quest_count, pr->hold[sp]); return; }
-    uint32_t pay = price_cents(sp) * v->quest_count * QUEST_PAY_PCT / 100;
+    uint32_t pay = price_cents(&v->market, sp) * v->quest_count * QUEST_PAY_PCT / 100;
     pr->hold[sp] -= v->quest_count;
-    g.pressure[sp] += (uint32_t)v->quest_count * 1000;
+    market_sold(&v->market, sp, v->quest_count);
     pr->money += pay;
     v->quest_done[p->profile / 8] |= bit;
     storage_save(p->profile, pr);
@@ -1798,10 +1922,10 @@ static void new_village_catalog(village_t *v) {
         v->offer[k] = item_in_rarity(base, RARITY_EPIC, RARITY_EPIC, rnd());
         v->offer_enchant[k] = (uint8_t)(1 + rnd_below(2));
     }
-    // Encomenda: uma espécie que não está saturada no mercado.
+    // Encomenda: uma espécie que não está saturada no balcão da vila.
     uint8_t fresh[FISH_COUNT], n = 0;
     for (int sp = 0; sp < FISH_COUNT; sp++)
-        if (price_cents(sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
+        if (price_cents(&v->market, sp) * 100 >= (uint32_t)SPECIES[sp].price_cents * QUEST_FRESH_PCT) fresh[n++] = (uint8_t)sp;
     uint8_t sp = n ? fresh[rnd_below(n)] : (uint8_t)rnd_below(FISH_COUNT);
     int count = QUEST_VALUE / (int)SPECIES[sp].price_cents;
     v->quest_species = sp;
@@ -2454,8 +2578,8 @@ static void join(int slot, const uint8_t *data, size_t len) {
             send_w(i, &w);
         }
     }
-    send_prices(slot);
     struct_resolve_near(p->x, p->y);
+    send_prices(slot); // depois de descobrir as vilas em volta: o balcão mais perto pode ser uma delas
     send_marks(slot);
     send_waypoints(slot);
     send_inventory(slot);
@@ -2543,6 +2667,7 @@ static void struct_resolve(int rx, int ry) {
         find_spot(rx, ry, 0x7111A, village_spot, &x, &y)) {
         village_t *v = &g.villages[g.village_count];
         *v = (village_t){.x = x, .y = y, .fav = (uint8_t)((h >> 8) % FISH_COUNT)};
+        market_init(&v->market, x, y, b);
         new_village_catalog(v);
         s->kind = STRUCT_VILLAGE, s->x = x, s->y = y, s->village = (int16_t)g.village_count++;
     } else if (b == BIOME_REEF && h % MERMAID_CHANCE == 0 && find_spot(rx, ry, 0x5E7EA, mermaid_spot, &x, &y)) {
@@ -2585,6 +2710,7 @@ void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
     for (int i = 0; i < PROBE_COUNT; i++)
         g.probe_sum[i] = world_region_checksum(PORT_RX + PROBES[i][0], PORT_RY + PROBES[i][1], seed);
     g.safe_zones[ZONE_PORT] = (safe_zone_t){PORT_X, PORT_Y, PORT_RADIUS + 14};
+    market_init(&g.port_market, DOCK_X, DOCK_Y, world_region_biome(PORT_RX, PORT_RY, seed));
     // As 5x5 regiões em volta do porto já nascem descobertas: o forte precisa
     // saber onde ficam as vilas e a sereia de perto para não cair em cima.
     for (int ry = PORT_RY - 2; ry <= PORT_RY + 2; ry++)
@@ -2702,15 +2828,21 @@ void game_tick(void) {
     update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) send_state(i);
+    // Mudou o balcão mais perto? Manda os preços dele na hora, sem esperar o
+    // segundo virar (chegar na vila e ver o preço do porto confunde).
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING && market_near(&g.players[i]) != g.players[i].market) send_prices(i);
 
     if (g.tick % TICK_HZ == 0) {
         for (int i = 0; i < MAX_PLAYERS; i++) // vilas e sereias perto de cada barco
             if (g.players[i].state == SLOT_PLAYING) struct_resolve_near(g.players[i].x, g.players[i].y);
-        for (int i = 0; i < FISH_COUNT; i++) g.pressure[i] = g.pressure[i] * 99 / 100;
+        market_decay();
         send_prices(-1);
         send_marks(-1);
         send_catalogs(); // a contagem até a troca anda
     }
+    if (g.tick % DIFFUSE_EVERY == 0) market_diffuse();
+    if (g.tick % DEMAND_DRIFT_EVERY == 0) market_drift();
     if (g.tick % 50 == 0) send_rank(-1);
     if (g.tick % SAVE_EVERY == 0) game_save_all();
 }

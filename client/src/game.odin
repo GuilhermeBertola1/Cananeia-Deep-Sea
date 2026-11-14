@@ -198,7 +198,7 @@ State :: struct {
 	boss:          Boss,
 	rank:          [RANK_SIZE]Rank_Entry,
 	rank_count:    int,
-	prices:        [FISH_COUNT]int,
+	prices:        [FISH_COUNT]int, // do balcão mais perto (o servidor escolhe)
 
 	// interface
 	shop_open:     bool,
@@ -998,6 +998,7 @@ on_net_message :: proc(data: []u8) {
 		}
 
 	case S_PRICES:
+		_ = read_u8(&r) // qual balcão: 0 = porto, 1 + v = vila v (o cliente não precisa)
 		for &p in s.prices do p = int(read_u16(&r))
 	
 

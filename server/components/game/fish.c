@@ -25,9 +25,13 @@ static const uint16_t BIOME_PCT[BIOME_COUNT][FISH_COUNT] = {
     [BIOME_ABYSS] = {[FISH_POLVO] = 50, [FISH_ESPADA] = 150, [FISH_LULA] = 300},
 };
 
-static uint32_t weight_in(int species, biome_t biome) {
+uint16_t fish_biome_pct(int species, biome_t biome) {
     uint16_t pct = BIOME_PCT[biome][species];
-    return (uint32_t)SPECIES[species].weight * (pct ? pct : 100) / 100;
+    return pct ? pct : 100;
+}
+
+static uint32_t weight_in(int species, biome_t biome) {
+    return (uint32_t)SPECIES[species].weight * fish_biome_pct(species, biome) / 100;
 }
 
 uint8_t fish_roll(tile_t tile, biome_t biome, uint32_t r) {
