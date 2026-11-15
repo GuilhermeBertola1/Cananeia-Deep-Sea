@@ -8,6 +8,8 @@
 #include "password.h"
 #include "boat.h"
 #include "weapon.h"
+#include "brain.h"
+#include "path.h"
 
 #define MAX_SCHOOLS 288 // até 36 por barco (no Recife), com 8 barcos espalhados
 #define PASSIVE_CATCH_PCT 6 // chance por tick em movimento
@@ -197,6 +199,7 @@ typedef struct {
     uint16_t capacity;
     int16_t stats[STAT_COUNT];
     int16_t market; // balcão dos preços que o jogador recebeu por último (ver market_near)
+    uint8_t ai;     // 1 = pescador NPC: sem conexão, quem aperta as "teclas" é npc_think()
 } player_t;
 
 typedef struct {
@@ -220,6 +223,7 @@ typedef struct {
 // Bag ou coroa boiando no mar, esperando alguém passar por cima.
 typedef struct {
     uint8_t alive;
+    uint8_t npc; // bag de um pescador NPC: o `owner` dela não é de nenhum perfil
     uint16_t x, y;
     uint32_t expires;
     loot_t loot;
@@ -344,6 +348,26 @@ typedef struct {
     uint8_t used, stock;
 } stock_cell_t;
 
+// Pescador NPC: o cérebro (qual estratégia usar) e o plano da viagem de agora
+// (como executar a estratégia, com regras fixas). Ver "pescadores NPC".
+typedef enum { NPC_GOING = 0, NPC_FISHING, NPC_RETURNING } npc_phase_t;
+
+typedef struct {
+    brain_t brain;          // brain.current = estratégia da viagem (NPC_NEAR_PORT...)
+    uint8_t phase;          // npc_phase_t
+    uint8_t replans;        // quantas vezes recalculou o caminho nesta perna
+    uint8_t still;          // ticks sem sair do lugar
+    int32_t area_x, area_y; // centro de onde vai pescar
+    int school;             // cardume que está seguindo (-1 = nenhum)
+    int shop;               // balcão onde vai vender (0 = porto, 1 + v = vila v)
+    int32_t last_x, last_y;
+    uint32_t trip_start;    // tick em que a viagem começou
+    uint32_t fish_start;    // tick em que começou a pescar
+    uint32_t next_turn;     // pescando andando: quando muda de rumo
+    uint32_t money_start;   // dinheiro no começo da viagem
+    path_t path;
+} npc_t;
+
 static struct {
     uint32_t seed, tick, rng;
     uint32_t probe_sum[PROBE_COUNT]; // checksum das regiões de teste, para o cliente conferir
@@ -371,9 +395,15 @@ static struct {
     boss_t boss;
     uint32_t next_boss; // tick em que aparece o próximo boss
     weather_t weather;
+    profile_t npc_profiles[NPC_MAX]; // perfis dos NPCs: só na memória, nunca salvos
+    npc_t npcs[NPC_MAX];             // o cérebro e o plano de cada NPC (slot HUMAN_SLOTS + i)
+    uint32_t npc_trips, npc_deaths, npc_tows;
     uint32_t sold;   // peixes vendidos desde o game_init (para a simulação)
     uint64_t earned; // e quanto pagaram, em centavos
 } g;
+
+static void npc_died(int slot); // na seção dos pescadores NPC
+static void npc_think(int slot);
 
 static uint8_t out[1024];
 
@@ -433,7 +463,16 @@ static biome_t biome_at(int x, int y) {
     return world_region_biome(world_region_of(x), world_region_of(y), g.seed);
 }
 
-static profile_t *prof(const player_t *p) { return &g.profiles[p->profile]; }
+// O perfil do barco. O NPC tem o dele à parte (g.npc_profiles), para não
+// ocupar vaga de gente, não entrar no ranking e nunca ser salvo.
+static profile_t *prof(const player_t *p) { return p->ai ? &g.npc_profiles[p->profile] : &g.profiles[p->profile]; }
+
+// Pessoa jogando (não NPC). Spawns, eventos, bosses e /status contam só elas.
+static int is_human(const player_t *p) { return p->state == SLOT_PLAYING && !p->ai; }
+
+static void save(const player_t *p) {
+    if (!p->ai) storage_save(p->profile, prof(p));
+}
 static int level(const profile_t *pr, int part) {
     return pr->boat[part] < BOAT_LEVELS ? pr->boat[part] : BOAT_LEVELS - 1;
 }
@@ -560,7 +599,7 @@ static void cell_near(int cx, int cy, int *x, int *y) {
 static void random_cell(int *x, int *y) {
     int cx = PORT_X, cy = PORT_Y, online[MAX_PLAYERS], n = 0;
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING) online[n++] = i;
+        if (is_human(&g.players[i])) online[n++] = i;
     if (n) {
         const player_t *p = &g.players[online[rnd_below((uint32_t)n)]];
         cx = p->x, cy = p->y;
@@ -584,12 +623,13 @@ static int in_bubble(const player_t *p, int x, int y) {
     return iabs(x - p->x) <= SPAWN_RANGE && iabs(y - p->y) <= SPAWN_RANGE;
 }
 
-// Longe de todos os barcos? Sem ninguém jogando, nada está longe (nada some).
+// Longe de todos os barcos de gente? Sem ninguém jogando, nada está longe
+// (nada some). Os NPCs não seguram cardume nem tubarão perto deles.
 static int far_from_boats(int x, int y) {
     int any = 0;
     for (int i = 0; i < MAX_PLAYERS; i++) {
         const player_t *p = &g.players[i];
-        if (p->state != SLOT_PLAYING) continue;
+        if (!is_human(p)) continue;
         if (!far_from(x, y, p->x, p->y, DESPAWN_RANGE)) return 0;
         any = 1;
     }
@@ -703,8 +743,9 @@ static int same_name(const char *a, const char *b) {
 
 // --- envio ------------------------------------------------------------------
 
+// NPC não tem conexão: o que iria para ele não vai para lugar nenhum.
 static void send_w(int slot, const writer_t *w) {
-    if (w->ok) g.send(slot, w->buf, w->len);
+    if (w->ok && !g.players[slot].ai) g.send(slot, w->buf, w->len);
 }
 
 static void send_all(const writer_t *w) {
@@ -740,7 +781,7 @@ static void write_player_info(writer_t *w, int id) {
 static void send_prices(int slot) {
     if (slot < 0) {
         for (int i = 0; i < MAX_PLAYERS; i++)
-            if (g.players[i].state == SLOT_PLAYING) send_prices(i);
+            if (is_human(&g.players[i])) send_prices(i);
         return;
     }
     player_t *p = &g.players[slot];
@@ -817,7 +858,7 @@ static void send_marks_to(int slot) {
 static void send_marks(int slot) {
     if (slot >= 0) { send_marks_to(slot); return; }
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING) send_marks_to(i);
+        if (is_human(&g.players[i])) send_marks_to(i);
 }
 
 // Os waypoints do jogador: só ele recebe.
@@ -897,7 +938,7 @@ static void send_inventory(int slot) {
 
 static int profile_online(int index) {
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING && g.players[i].profile == index) return 1;
+        if (is_human(&g.players[i]) && g.players[i].profile == index) return 1;
     return 0;
 }
 
@@ -975,7 +1016,7 @@ static void send_state(int slot) {
     for (int i = 0; i < FISH_COUNT; i++) put_u16(&w, pr->hold[i]);
 
     uint8_t online = 0;
-    for (int i = 0; i < MAX_PLAYERS; i++) online += g.players[i].state == SLOT_PLAYING;
+    for (int i = 0; i < MAX_PLAYERS; i++) online += is_human(&g.players[i]);
     put_u8(&w, online);
 
     size_t count_at = w.len;
@@ -1232,7 +1273,7 @@ static void upgrade(int slot, uint8_t part) {
     pr->money -= price;
     pr->boat[part] = (uint8_t)next;
     update_stats(p);
-    storage_save(p->profile, pr); // dinheiro gasto: salva já
+    save(p); // dinheiro gasto: salva já
     send_event(slot, EV_UPGRADED, part, (uint16_t)next, price);
     send_boat(slot);
     send_inventory(slot); // os stats do barco mudaram
@@ -1250,7 +1291,7 @@ static void repair(int slot) {
     pr->money -= price;
     pr->damage = 0;
     update_stats(p); // sai da avaria
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_REPAIRED, FISH_NONE, (uint16_t)missing, price);
     send_rank(-1);
 }
@@ -1286,7 +1327,7 @@ static void mercenary(int slot) {
     if (!got && !crowns) { send_event(slot, EV_MERC_NOTHING, (uint8_t)left, 0, 0); return; }
     uint32_t bounty = (uint32_t)crowns * CROWN_BOUNTY_CENTS;
     pr->money += bounty;
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_MERC, (uint8_t)left, (uint16_t)got, bounty);
     send_inventory(slot);
     if (bounty) send_rank(-1);
@@ -1307,7 +1348,7 @@ static void spin(int slot) {
         uint32_t stolen = pr->money * STEAL_PCT / 100;
         if (stolen > STEAL_MAX_CENTS) stolen = STEAL_MAX_CENTS;
         pr->money -= stolen;
-        storage_save(p->profile, pr);
+        save(p);
         send_event(slot, EV_SPIN_STEAL, FISH_NONE, 0, stolen);
         if (stolen) send_rank(-1);
         return;
@@ -1316,7 +1357,7 @@ static void spin(int slot) {
         // Alvo: alguém online, se tiver. Senão, qualquer capitão já criado.
         int online[MAX_PLAYERS], n_online = 0, n_any = 0;
         for (int i = 0; i < MAX_PLAYERS; i++)
-            if (i != slot && g.players[i].state == SLOT_PLAYING) online[n_online++] = i;
+            if (i != slot && is_human(&g.players[i])) online[n_online++] = i;
         for (int i = 0; i < MAX_PROFILES; i++) n_any += g.profiles[i].used && i != p->profile;
         int target = -1;
         if (n_online) {
@@ -1331,7 +1372,7 @@ static void spin(int slot) {
         if (target >= 0) {
             pr->has_mission = 1;
             pr->mission_target = (uint8_t)target;
-            storage_save(p->profile, pr);
+            save(p);
             send_inventory(slot); // leva o nome do alvo
             send_event(slot, EV_SPIN_MISSION, FISH_NONE, 0, 0);
             return;
@@ -1359,7 +1400,7 @@ static void deliver_crown(int slot) {
     pr->loot[crown] = (loot_t){0};
     pr->has_mission = 0;
     update_stats(p); // se o item estava equipado, o barco já sente
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_ENCHANT, pr->bag[pick].base, pr->enchant[pick], (uint32_t)pick);
     send_inventory(slot);
 }
@@ -1371,7 +1412,7 @@ static void mermaid(int slot, uint8_t action) {
     if (action == MERMAID_GIVE_UP) {
         if (!pr->has_mission) return;
         pr->has_mission = 0;
-        storage_save(p->profile, pr);
+        save(p);
         send_event(slot, EV_MISSION_GIVE_UP, FISH_NONE, 0, 0);
         send_inventory(slot);
     } else if (pr->has_mission) {
@@ -1412,7 +1453,7 @@ static void combine(int slot, uint8_t a, uint8_t b) {
     pr->enchant[b] = 0;
     pr->money -= price;
     update_stats(p);
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_COMBINED, made.base, item_info(made).rarity, price);
     send_inventory(slot);
     send_rank(-1);
@@ -1429,7 +1470,7 @@ static void buy_armory(int slot, uint8_t offer) {
     item_t item = item_in_rarity(o->base, o->rarity, o->rarity, rnd());
     if (bag_add(pr, item) < 0) { send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0); return; }
     pr->money -= o->price;
-    storage_save(p->profile, pr); // dinheiro gasto: salva já
+    save(p); // dinheiro gasto: salva já
     send_event(slot, EV_BOUGHT, item.base, o->rarity, o->price);
     send_inventory(slot);
     send_rank(-1);
@@ -1462,7 +1503,7 @@ static void send_catalog(int slot) {
 // Para todo mundo que está numa vila: depois de uma compra ou de uma troca.
 static void send_catalogs(void) {
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING) send_catalog(i);
+        if (is_human(&g.players[i])) send_catalog(i);
 }
 
 // Mascate: quem chegar primeiro leva. O item vem com o encanto já posto.
@@ -1478,7 +1519,7 @@ static void buy_peddler(int slot, int village, uint8_t offer) {
     if (index < 0) { send_event(slot, EV_BAG_FULL, FISH_NONE, 0, 0); return; }
     pr->enchant[index] = v->offer_enchant[offer];
     pr->money -= price;
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_BOUGHT, v->offer[offer].base, RARITY_EPIC, price);
     v->offer[offer] = (item_t){0}; // esgotado até a próxima troca
     send_inventory(slot);
@@ -1503,7 +1544,7 @@ static void deliver(int slot) {
     market_sold(&v->market, sp, v->quest_count);
     pr->money += pay;
     v->quest_done[p->profile / 8] |= bit;
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_QUEST_DONE, sp, v->quest_count, pay);
     give_random_item(slot); // o baú (se a bolsa estiver cheia, avisa)
     send_catalog(slot);
@@ -1611,7 +1652,7 @@ static void leech(int shooter, int dmg) {
 
 // Joga um saque no mar, numa célula de água perto de (x, y). Com o mar
 // cheio de saques, o mais velho dá lugar ao novo.
-static void drop_loot(int x, int y, const loot_t *loot) {
+static void drop_loot(int x, int y, const loot_t *loot, int npc) {
     int pick = 0;
     for (int i = 0; i < MAX_DROPS; i++) {
         if (!g.drops[i].alive) { pick = i; break; }
@@ -1623,7 +1664,8 @@ static void drop_loot(int x, int y, const loot_t *loot) {
         x = nx, y = ny;
         break;
     }
-    g.drops[pick] = (drop_t){.alive = 1, .x = (uint16_t)x, .y = (uint16_t)y, .expires = g.tick + DROP_LIFE, .loot = *loot};
+    g.drops[pick] = (drop_t){.alive = 1, .npc = (uint8_t)npc, .x = (uint16_t)x, .y = (uint16_t)y,
+                             .expires = g.tick + DROP_LIFE, .loot = *loot};
 }
 
 // Morte por tiro ou mordida: o porão vira uma bag, cai a coroa, cai o saque que o barco
@@ -1637,10 +1679,11 @@ static void die(int slot, int killer) {
     int fish = 0;
     for (int i = 0; i < FISH_COUNT; i++) fish += bag.fish[i] = pr->hold[i];
     memset(pr->hold, 0, sizeof pr->hold);
-    if (fish) drop_loot(p->x, p->y, &bag);
-    drop_loot(p->x, p->y, &(loot_t){.kind = LOOT_CROWN, .owner = (uint8_t)p->profile});
+    if (fish) drop_loot(p->x, p->y, &bag, p->ai);
+    // Coroa só de gente: ela vale para a missão da sereia, que caça pessoas.
+    if (!p->ai) drop_loot(p->x, p->y, &(loot_t){.kind = LOOT_CROWN, .owner = (uint8_t)p->profile}, 0);
     for (int i = 0; i < LOOT_SLOTS; i++) {
-        if (pr->loot[i].kind != LOOT_NONE) drop_loot(p->x, p->y, &pr->loot[i]);
+        if (pr->loot[i].kind != LOOT_NONE) drop_loot(p->x, p->y, &pr->loot[i], 0);
         pr->loot[i] = (loot_t){0};
     }
 
@@ -1651,9 +1694,10 @@ static void die(int slot, int killer) {
     p->grabbed = 0;
     find_spawn(p);
     update_stats(p);
-    storage_save(p->profile, pr);
+    save(p);
     send_event(slot, EV_DIED, (uint8_t)killer, (uint16_t)fish, 0);
     send_inventory(slot);
+    if (p->ai) npc_died(slot);
 
     if (killer >= 0 && killer < MAX_PLAYERS && g.players[killer].state == SLOT_PLAYING) {
         prof(&g.players[killer])->kills++;
@@ -1684,7 +1728,8 @@ static void pick_up(int slot) {
     for (int i = 0; i < MAX_DROPS; i++) {
         drop_t *d = &g.drops[i];
         if (!d->alive || d->x < p->x - 1 || d->x > p->x + 1 || d->y < p->y - 1 || d->y > p->y + 1) continue;
-        if (d->loot.owner == p->profile) {
+        int mine = !d->npc && d->loot.owner == p->profile;
+        if (mine) {
             int fish = 0;
             for (int f = 0; f < FISH_COUNT; f++) fish += d->loot.fish[f];
             if (fish > p->capacity - hold_count(p)) {
@@ -1701,9 +1746,12 @@ static void pick_up(int slot) {
                 continue;
             }
             pr->loot[free_slot] = d->loot;
+            // Bag de NPC: passa a ser "de quem pegou", para não confundir
+            // com o perfil de gente que tem o mesmo número.
+            if (d->npc) pr->loot[free_slot].owner = (uint8_t)p->profile;
         }
         d->alive = 0;
-        send_event(slot, EV_LOOT, d->loot.kind, d->loot.owner == p->profile, 0); // count 1 = era seu
+        send_event(slot, EV_LOOT, d->loot.kind, mine, 0); // count 1 = era seu
         send_inventory(slot);
         send_marks(-1);
     }
@@ -1899,7 +1947,7 @@ static void update_predators(void) {
         g.next_shark = g.tick + SHARK_RESPAWN;
         for (int t = 0; t < MAX_PLAYERS; t++) {
             const player_t *p = &g.players[t];
-            if (p->state != SLOT_PLAYING) continue;
+            if (!is_human(p)) continue;
             int n = 0;
             for (int i = 0; i < MAX_PREDATORS; i++) {
                 const predator_t *pd = &g.predators[i];
@@ -2037,7 +2085,7 @@ static void ghost_sunk(void) {
         uint32_t share = (uint32_t)((uint64_t)GHOST_BOUNTY_CENTS * g.ghost_dmg[i] / total);
         profile_t *pr = prof(&g.players[i]);
         pr->money += share;
-        storage_save(g.players[i].profile, pr);
+        save(&g.players[i]);
         send_event(i, EV_PREDATOR_KILL, PRED_GHOST, g.ghost_dmg[i], share);
         give_random_item(i);
     }
@@ -2254,7 +2302,7 @@ static int boss_spot(int *ox, int *oy) {
 
 static void start_boss(uint8_t kind) {
     uint8_t online = 0;
-    for (int i = 0; i < MAX_PLAYERS; i++) online += g.players[i].state == SLOT_PLAYING;
+    for (int i = 0; i < MAX_PLAYERS; i++) online += is_human(&g.players[i]);
     g.next_boss = g.tick + BOSS_GAP + rnd_below(BOSS_GAP);
     if (!online) { g.next_boss = g.tick + 60 * TICK_HZ; return; } // ninguém para enfrentar: espera
     g.boss = (boss_t){.kind = kind, .target = -1};
@@ -2304,7 +2352,7 @@ static void boss_killed(void) {
         send_event(i, EV_BOSS_REWARD, b->kind, b->dmg[i], share);
         if (i != mvp && (uint32_t)b->dmg[i] * 100 >= total * BOSS_HELPER_PCT) give_random_item(i);
         if (i == mvp) send_inventory(i);
-        storage_save(g.players[i].profile, pr);
+        save(&g.players[i]);
     }
     // `count` 1 = afundou; `value` = slot de quem levou a arma + 1 (0 = ninguém).
     event_all(EV_BOSS_END, b->kind, 1, (uint32_t)(mvp + 1));
@@ -2381,7 +2429,7 @@ static void update_player(int slot) {
     prof(p)->x = (uint16_t)p->x;
     prof(p)->y = (uint16_t)p->y;
     prof(p)->map_version = MAP_VERSION;
-    pick_up(slot);
+    if (!p->ai) pick_up(slot); // NPC não recolhe bag nem coroa
 
     // Produção = % a mais na chance de pescar. +50 de produção: 6% vira 9%.
     int production = p->stats[STAT_PRODUCTION] > -100 ? p->stats[STAT_PRODUCTION] : -100;
@@ -2415,7 +2463,7 @@ static void update_schools(void) {
     int free_i = 0;
     for (int t = 0; t < MAX_PLAYERS; t++) {
         const player_t *p = &g.players[t];
-        if (p->state != SLOT_PLAYING) continue;
+        if (!is_human(p)) continue;
         int have = 0, want = SCHOOLS_PER_BOAT * BIOME_SCHOOL_PCT[biome_at(p->x, p->y)] / 100;
         for (int i = 0; i < MAX_SCHOOLS; i++) have += g.schools[i].alive && in_bubble(p, g.schools[i].x, g.schools[i].y);
         for (int attempts = 300; have < want && attempts > 0; attempts--) {
@@ -2703,6 +2751,373 @@ static void place_armory(void) {
     }
 }
 
+// --- pescadores NPC ----------------------------------------------------------
+//
+// Cada NPC é um barco de verdade (player_t com ai = 1): pesca, vende, bate na
+// costa, toma mordida e morre igual a qualquer um. A diferença é que, em vez
+// de teclas, quem preenche dx e dy é o npc_think(), uma vez por tick.
+//
+// Uma viagem = sair do cais, pescar e vender. Duas camadas:
+//   - o cérebro (brain.c) escolhe a ESTRATÉGIA no começo da viagem e, no fim,
+//     recebe quanto ela rendeu por minuto;
+//   - as regras abaixo EXECUTAM a estratégia: para onde ir, quando voltar e
+//     onde vender. Essas não aprendem nada.
+
+#define NPC_FULL_PCT 90                  // volta com o porão 90% cheio,
+#define NPC_FISH_TIME (5 * 60 * TICK_HZ) // ou depois de 5 min pescando,
+#define NPC_HURT_PCT 40                  // ou com menos de 40% da vida, ou se um bicho o caça
+#define NPC_AREA_R 12        // pesca andando a até 12 células do centro da área
+#define NPC_NEAR_MIN 20      // "perto do porto": área entre 20 e 50 células do porto
+#define NPC_NEAR_MAX 50
+#define NPC_FAR_MIN 60       // "estoque cheio" e "vila": entre 60 e 150
+#define NPC_FAR_MAX 150
+#define NPC_SCHOOL_RANGE 150 // procura cardume a até 150 células
+#define NPC_SHOP_RANGE 300   // e balcão para vender a até 300
+#define NPC_OFF_PATH 3       // saiu mais que isso do caminho: recalcula
+#define NPC_STUCK 20         // 2 s sem sair do lugar: recalcula
+#define NPC_MAX_REPLANS 6    // depois disso, tenta um rumo qualquer por uns instantes
+#define NPC_GOING_TIME (3 * 60 * TICK_HZ)  // 3 min sem chegar na área: pesca onde está
+#define NPC_TRIP_TIME (20 * 60 * TICK_HZ)  // 20 min de viagem: chama o reboque
+#define NPC_TOW_CENTS 5000                 // o reboque até o porto custa $50
+
+static const char *NPC_NAMES[NPC_MAX] = {
+    "Seu Ze", "Dona Cida", "Tonho", "Biu", "Neca", "Dito", "Juca", "Lia",
+    "Mane", "Tiao", "Rosa", "Quinzinho", "Nhanha", "Bento", "Firmino", "Didi",
+};
+
+static npc_t *npc_of(int slot) { return &g.npcs[slot - HUMAN_SLOTS]; }
+static int sign(int v) { return (v > 0) - (v < 0); }
+
+// Uma célula de água entre `min` e `max` células de (cx, cy). 0 se não achou.
+static int water_in_ring(int cx, int cy, int min, int max, int *x, int *y) {
+    for (int tries = 0; tries < 60; tries++) {
+        int dx = (int)rnd_below(2 * max + 1) - max, dy = (int)rnd_below(2 * max + 1) - max;
+        if (cheb(dx, dy) < min || !tile_is_water(tile(cx + dx, cy + dy))) continue;
+        *x = cx + dx, *y = cy + dy;
+        return 1;
+    }
+    return 0;
+}
+
+// O cardume vivo mais perto do barco, a até NPC_SCHOOL_RANGE (-1 = nenhum).
+static int npc_nearest_school(const player_t *p) {
+    int best = -1, best_d = NPC_SCHOOL_RANGE + 1;
+    for (int i = 0; i < MAX_SCHOOLS; i++) {
+        const school_t *s = &g.schools[i];
+        if (!s->alive) continue;
+        int d = cheb(s->x - p->x, s->y - p->y);
+        if (d < best_d) best_d = d, best = i;
+    }
+    return best;
+}
+
+// Quanto o porão vale no balcão `id` agora (com o bônus da espécie favorita da vila).
+static uint64_t hold_value(const player_t *p, int id) {
+    const market_t *m = market_get(id);
+    uint8_t fav = id > 0 ? g.villages[id - 1].fav : FISH_NONE;
+    uint64_t total = 0;
+    for (int sp = 0; sp < FISH_COUNT; sp++) {
+        uint32_t price = price_cents(m, sp);
+        if (sp == fav) price = price * (100 + VILLAGE_BONUS_PCT) / 100;
+        total += (uint64_t)price * prof(p)->hold[sp];
+    }
+    return total;
+}
+
+// Onde vender. "Vila": o balcão (até NPC_SHOP_RANGE) que paga mais pelo porão,
+// mesmo longe. As outras: o balcão mais perto.
+static int npc_pick_shop(const player_t *p, const npc_t *n) {
+    if (n->brain.current != NPC_VILLAGE) return market_near(p);
+    int best = 0;
+    uint64_t best_v = hold_value(p, 0);
+    for (int id = 1; id < market_count(); id++) {
+        int x, y;
+        market_pos(id, &x, &y);
+        if (cheb(x - p->x, y - p->y) > NPC_SHOP_RANGE) continue;
+        uint64_t v = hold_value(p, id);
+        if (v > best_v) best_v = v, best = id;
+    }
+    return best;
+}
+
+// Calcula o caminho até (tx, ty). Muito longe para uma busca só, vai por
+// pernas: um ponto de água a NPC_LEG células na direção do destino, e de lá
+// calcula de novo. Sem caminho (0), o npc_follow vai em linha reta.
+#define NPC_LEG 250
+static int npc_plan(player_t *p, npc_t *n, int tx, int ty) {
+    n->still = 0;
+    int d = cheb(tx - p->x, ty - p->y);
+    if (d > NPC_LEG) {
+        int lx = p->x + (int)((int64_t)(tx - p->x) * NPC_LEG / d), ly = p->y + (int)((int64_t)(ty - p->y) * NPC_LEG / d);
+        if (tile_is_water(tile(lx, ly)) || water_in_ring(lx, ly, 0, 16, &lx, &ly)) tx = lx, ty = ly;
+    }
+    if (path_find(&n->path, p->x, p->y, tx, ty)) return 1;
+    n->path.len = 0;
+    return 0;
+}
+
+static int npc_go(player_t *p, npc_t *n, uint8_t phase, int tx, int ty) {
+    n->phase = phase;
+    n->replans = 0;
+    return npc_plan(p, n, tx, ty);
+}
+
+// Volta para vender. Se não tem caminho até o balcão escolhido, tenta o porto.
+static void npc_go_sell(player_t *p, npc_t *n) {
+    n->shop = npc_pick_shop(p, n);
+    int x, y;
+    market_pos(n->shop, &x, &y);
+    if (npc_go(p, n, NPC_RETURNING, x, y) || n->shop == 0) return;
+    n->shop = 0;
+    npc_go(p, n, NPC_RETURNING, DOCK_X, DOCK_Y);
+}
+
+// (x, y) já está em (tx, ty) ou chega lá num passo, sem cortar quina de ilha?
+// "Colado" sozinho não basta: do lado de uma pedra, a célula de depois dela
+// está colada, mas o caminho dá a volta.
+static int one_step(int x, int y, int tx, int ty) {
+    int dx = tx - x, dy = ty - y;
+    if (cheb(dx, dy) > 1) return 0;
+    if (dx && dy) return tile_is_sailable(tile(tx, y)) && tile_is_sailable(tile(x, ty));
+    return 1;
+}
+
+// Anda pelo caminho até (tx, ty). Devolve 1 quando chegou (a 1 célula).
+static int npc_follow(player_t *p, npc_t *n, int tx, int ty) {
+    if (cheb(p->x - tx, p->y - ty) <= 1) return 1;
+    path_t *pa = &n->path;
+    int ax = tx, ay = ty; // para onde apontar
+    int lost = n->still > NPC_STUCK;
+    if (pa->len) {
+        // Avança até a célula mais adiante (das 8 próximas) que o barco já
+        // alcançou: está nela ou a um passo livre dela. O leme não deixa
+        // acertar a célula em cheio, e exigir isso faz o barco rodar em volta.
+        // Andou no caminho: as tentativas de recalcular zeram.
+        for (int i = pa->next; i < pa->len && i < pa->next + 8; i++)
+            if (one_step(p->x, p->y, pa->x[i], pa->y[i])) pa->next = i + 1, n->replans = 0;
+        if (pa->next >= pa->len) { // fim de uma perna (destino longe): calcula a próxima
+            npc_plan(p, n, tx, ty);
+            return 0;
+        }
+        // Mira a próxima célula do caminho: é vizinha e a busca já garantiu
+        // que dá para ir até ela sem cortar quina.
+        ax = pa->x[pa->next], ay = pa->y[pa->next];
+        if (cheb(ax - p->x, ay - p->y) > NPC_OFF_PATH) lost = 1;
+    }
+    if (lost && n->replans < NPC_MAX_REPLANS) {
+        n->replans++;
+        npc_plan(p, n, tx, ty);
+    } else if (lost) {
+        // Recalculou demais sem sair do lugar: um rumo qualquer por uns
+        // instantes e depois tenta de novo do zero.
+        n->still = 0, n->replans = 0;
+        p->dx = (int8_t)((int)rnd_below(3) - 1), p->dy = (int8_t)((int)rnd_below(3) - 1);
+        return 0;
+    }
+    p->dx = (int8_t)sign(ax - p->x);
+    p->dy = (int8_t)sign(ay - p->y);
+    return 0;
+}
+
+// Pesca andando em volta do centro da área (a pesca passiva só acontece com o
+// barco andando). Muda de rumo de tempos em tempos ou quando bate.
+static void npc_wander(player_t *p, npc_t *n) {
+    if (g.tick < n->next_turn && n->still < 5) return;
+    n->next_turn = g.tick + 2 * TICK_HZ + rnd_below(4 * TICK_HZ);
+    n->still = 0;
+    if (cheb(p->x - n->area_x, p->y - n->area_y) > NPC_AREA_R) {
+        p->dx = (int8_t)sign(n->area_x - p->x), p->dy = (int8_t)sign(n->area_y - p->y);
+        return;
+    }
+    for (int tries = 0; tries < 8; tries++) {
+        int d = (int)rnd_below(8);
+        if (!tile_is_water(tile(p->x + 3 * DIR_X[d], p->y + 3 * DIR_Y[d]))) continue;
+        p->dx = DIR_X[d], p->dy = DIR_Y[d];
+        return;
+    }
+}
+
+// Começo de viagem: o cérebro escolhe a estratégia e as regras escolhem o destino.
+static void npc_start_trip(int slot) {
+    player_t *p = &g.players[slot];
+    npc_t *n = npc_of(slot);
+    int strategy = brain_choose(&n->brain);
+    n->trip_start = g.tick;
+    n->money_start = prof(p)->money;
+    n->school = -1;
+    int x = p->x, y = p->y, ok = 0;
+    if (strategy == NPC_SCHOOL) {
+        n->school = npc_nearest_school(p);
+        if (n->school >= 0) x = g.schools[n->school].x, y = g.schools[n->school].y, ok = 1;
+    } else if (strategy == NPC_FULL_STOCK || strategy == NPC_VILLAGE) {
+        // Das 12 áreas sorteadas longe do porto, a de mais peixe.
+        int best = -1;
+        for (int i = 0; i < 12; i++) {
+            int cx, cy;
+            if (!water_in_ring(PORT_X, PORT_Y, NPC_FAR_MIN, NPC_FAR_MAX, &cx, &cy)) continue;
+            int st = stock_get(cx, cy);
+            if (st > best) best = st, x = cx, y = cy, ok = 1;
+        }
+    }
+    // "Perto do porto", ou não achou nada melhor. Área sem caminho: sorteia outra.
+    if (!ok) water_in_ring(PORT_X, PORT_Y, NPC_NEAR_MIN, NPC_NEAR_MAX, &x, &y);
+    for (int tries = 0; !npc_go(p, n, NPC_GOING, x, y) && tries < 3; tries++)
+        water_in_ring(PORT_X, PORT_Y, NPC_NEAR_MIN, NPC_NEAR_MAX, &x, &y);
+    n->area_x = x, n->area_y = y;
+}
+
+// Fim de viagem (vendeu, ou morreu): o cérebro recebe quanto rendeu por minuto.
+static void npc_end_trip(int slot) {
+    player_t *p = &g.players[slot];
+    npc_t *n = npc_of(slot);
+    uint32_t ticks = g.tick - n->trip_start;
+    if (ticks < TICK_HZ) ticks = TICK_HZ;
+    int64_t gain = (int64_t)prof(p)->money - n->money_start; // já com o conserto descontado
+    brain_reward(&n->brain, (int32_t)(gain * 60 * TICK_HZ / ticks)); // centavos por minuto
+    npc_start_trip(slot);
+}
+
+static void npc_died(int slot) {
+    g.npc_deaths++;
+    npc_end_trip(slot);
+}
+
+// Hora de voltar? Porão cheio, pescou demais, barco machucado ou um bicho caçando.
+static int npc_should_return(int slot, const npc_t *n) {
+    const player_t *p = &g.players[slot];
+    if (hold_count(p) * 100 >= p->capacity * NPC_FULL_PCT) return 1;
+    if (n->phase == NPC_FISHING && g.tick - n->fish_start > NPC_FISH_TIME) return 1;
+    if (hp(p) * 100 < hp_max(p) * NPC_HURT_PCT) return 1;
+    for (int i = 0; i < MAX_PREDATORS; i++)
+        if (g.predators[i].alive && g.predators[i].target == slot) return 1;
+    return g.boss.kind && g.boss.target == slot;
+}
+
+// Seguindo um cardume: dentro dele, para (a pesca do cardume não precisa
+// andar); fora, vai até ele. Devolve 0 se o cardume sumiu.
+static int npc_school(player_t *p, npc_t *n) {
+    if (n->school < 0 || !g.schools[n->school].alive) return 0;
+    const school_t *s = &g.schools[n->school];
+    int dx = s->x - p->x, dy = s->y - p->y;
+    if (dist2(dx, dy) < (int64_t)s->r * s->r) p->dx = p->dy = 0;
+    else p->dx = (int8_t)sign(dx), p->dy = (int8_t)sign(dy);
+    return 1;
+}
+
+// Reboque: o NPC encalhou num canto que as regras não resolvem (acontece, o
+// leme tem inércia e algumas costas são enroscadas). Vai para o cais do porto
+// com o porão como está e paga o reboque, que entra na recompensa como
+// prejuízo: a estratégia que o levou para lá fica com a média mais baixa.
+static void npc_tow(int slot) {
+    player_t *p = &g.players[slot];
+    profile_t *pr = prof(p);
+    pr->money = pr->money > NPC_TOW_CENTS ? pr->money - NPC_TOW_CENTS : 0;
+    p->vel = 0, p->move_budget = 0;
+    p->x = DOCK_X, p->y = DOCK_Y; // deixa no cais: no próximo tick ele vende e a viagem acaba
+    g.npc_tows++;
+    npc_t *n = npc_of(slot);
+    n->phase = NPC_RETURNING, n->shop = 0, n->path.len = 0;
+}
+
+static void npc_think(int slot) {
+    player_t *p = &g.players[slot];
+    npc_t *n = npc_of(slot);
+    if (g.tick - n->trip_start > NPC_TRIP_TIME && g.tick % TICK_HZ == 0 && n->phase == NPC_RETURNING) {
+        npc_tow(slot);
+        return;
+    }
+    if (p->x == n->last_x && p->y == n->last_y) {
+        if (n->still < 255) n->still++;
+    } else {
+        n->still = 0, n->last_x = p->x, n->last_y = p->y;
+    }
+    // Chegou num balcão voltando para vender: vende tudo, conserta e começa outra viagem.
+    if (n->phase == NPC_RETURNING && at_shop(p)) {
+        sell(slot, FISH_NONE);
+        repair(slot);
+        g.npc_trips++;
+        npc_end_trip(slot);
+        return;
+    }
+    if (n->phase != NPC_RETURNING && npc_should_return(slot, n)) {
+        npc_go_sell(p, n);
+        return;
+    }
+    switch (n->phase) {
+    case NPC_GOING: {
+        int arrived;
+        if (n->brain.current == NPC_SCHOOL && n->school >= 0) {
+            if (!g.schools[n->school].alive) n->school = npc_nearest_school(p);
+            if (n->school < 0) { // sem cardume: pesca onde está
+                n->area_x = p->x, n->area_y = p->y;
+                arrived = 1;
+            } else {
+                const school_t *s = &g.schools[n->school];
+                arrived = cheb(s->x - p->x, s->y - p->y) <= s->r + 2 || npc_follow(p, n, s->x, s->y);
+            }
+        } else {
+            arrived = npc_follow(p, n, n->area_x, n->area_y);
+        }
+        if (!arrived && g.tick - n->trip_start > NPC_GOING_TIME) { // não chega nunca: pesca aqui
+            n->area_x = p->x, n->area_y = p->y, n->school = -1;
+            arrived = 1;
+        }
+        if (arrived) n->phase = NPC_FISHING, n->fish_start = g.tick;
+        break;
+    }
+    case NPC_FISHING:
+        if (n->brain.current == NPC_SCHOOL && !npc_school(p, n)) {
+            // O cardume foi embora: o próximo, se estiver perto; senão pesca andando ali.
+            int next = npc_nearest_school(p);
+            if (next >= 0 && cheb(g.schools[next].x - p->x, g.schools[next].y - p->y) <= 60) {
+                n->school = next;
+                npc_go(p, n, NPC_GOING, g.schools[next].x, g.schools[next].y);
+            } else {
+                n->school = -1;
+                n->area_x = p->x, n->area_y = p->y;
+            }
+        }
+        if (n->school < 0) npc_wander(p, n);
+        break;
+    case NPC_RETURNING: {
+        int x, y;
+        market_pos(n->shop, &x, &y);
+        npc_follow(p, n, x, y);
+        break;
+    }
+    }
+}
+
+int game_add_npcs(int count) {
+    int added = 0;
+    for (int slot = HUMAN_SLOTS; slot < MAX_PLAYERS && added < count; slot++) {
+        player_t *p = &g.players[slot];
+        if (p->state != SLOT_FREE) continue;
+        int i = slot - HUMAN_SLOTS;
+        profile_t *pr = &g.npc_profiles[i];
+        *pr = (profile_t){.used = 1};
+        memcpy(pr->name, NPC_NAMES[i], strlen(NPC_NAMES[i]) + 1); // todos cabem em NAME_MAX_LEN
+        item_t rod; // a mesma vara comum de quem começa
+        do rod = item_new(ITEM_VARA, rnd());
+        while (item_info(rod).rarity != RARITY_COMMON);
+        pr->bag[0] = rod;
+        pr->equipped[EQUIP_TOOL] = 1;
+        *p = (player_t){.state = SLOT_PLAYING, .ai = 1, .profile = i, .color = (uint8_t)rnd_below(6)};
+        update_stats(p);
+        find_spawn(p);
+        npc_t *n = npc_of(slot);
+        *n = (npc_t){.school = -1};
+        brain_init(&n->brain, NPC_STRATEGIES, g.seed ^ (uint32_t)(slot * 0x9E3779B9u));
+        npc_start_trip(slot);
+        // Apresenta o NPC para quem já está jogando.
+        writer_t w = writer(out, sizeof out);
+        write_player_info(&w, slot);
+        send_all(&w);
+        added++;
+    }
+    return added;
+}
+
 // --- API --------------------------------------------------------------------
 
 void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
@@ -2730,7 +3145,7 @@ void game_init(uint32_t seed, uint32_t random_seed, game_send_fn send) {
 }
 
 int game_connect(void) {
-    for (int i = 0; i < MAX_PLAYERS; i++) {
+    for (int i = 0; i < HUMAN_SLOTS; i++) { // os slots do fim são dos NPCs
         if (g.players[i].state == SLOT_FREE) {
             g.players[i] = (player_t){.state = SLOT_CONNECTED};
             return i;
@@ -2740,17 +3155,17 @@ int game_connect(void) {
 }
 
 void game_disconnect(int slot) {
-    if (slot < 0 || slot >= MAX_PLAYERS) return;
+    if (slot < 0 || slot >= HUMAN_SLOTS) return;
     player_t *p = &g.players[slot];
     int was_playing = p->state == SLOT_PLAYING;
     g.boss.dmg[slot] = 0; // o próximo a usar o slot não herda o dano no boss
-    if (was_playing) storage_save(p->profile, prof(p));
+    if (was_playing) save(p);
     p->state = SLOT_FREE;
     if (was_playing) send_rank(-1);
 }
 
 void game_receive(int slot, const uint8_t *data, size_t len) {
-    if (slot < 0 || slot >= MAX_PLAYERS || len < 1) return;
+    if (slot < 0 || slot >= HUMAN_SLOTS || len < 1) return;
     player_t *p = &g.players[slot];
     if (p->state == SLOT_CONNECTED) {
         if (data[0] == C_JOIN) join(slot, data + 1, len - 1);
@@ -2805,14 +3220,14 @@ void game_receive(int slot, const uint8_t *data, size_t len) {
 
 void game_save_all(void) {
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING) storage_save(g.players[i].profile, prof(&g.players[i]));
+        if (is_human(&g.players[i])) save(&g.players[i]);
 }
 
 size_t game_chunks(void) { return chunks_count(); }
 
 int game_online(void) {
     int n = 0;
-    for (int i = 0; i < MAX_PLAYERS; i++) n += g.players[i].state == SLOT_PLAYING;
+    for (int i = 0; i < MAX_PLAYERS; i++) n += is_human(&g.players[i]);
     return n;
 }
 
@@ -2822,10 +3237,21 @@ void game_stats(game_stats_t *out) {
     for (int i = 0; i < MAX_PLAYERS; i++) {
         const player_t *p = &g.players[i];
         if (p->state != SLOT_PLAYING) continue;
+        if (p->ai) {
+            const npc_t *n = npc_of(i);
+            out->npcs++;
+            out->npc_money += prof(p)->money;
+            out->npc_using[n->brain.current]++;
+            out->npc_best[brain_best(&n->brain)]++;
+            continue;
+        }
         out->online++;
         out->money += prof(p)->money;
         out->hold += (uint32_t)hold_count(p);
     }
+    out->npc_trips = g.npc_trips;
+    out->npc_deaths = g.npc_deaths;
+    out->npc_tows = g.npc_tows;
     out->sold = g.sold;
     out->earned = g.earned;
     for (int i = 0; i < MAX_SCHOOLS; i++) out->schools += g.schools[i].alive;
@@ -2849,6 +3275,8 @@ void game_tick(void) {
     update_weather();
     update_catalog();
     update_schools();
+    for (int i = HUMAN_SLOTS; i < MAX_PLAYERS; i++)
+        if (g.players[i].state == SLOT_PLAYING) npc_think(i); // o NPC "aperta as teclas"
     for (int i = 0; i < MAX_PLAYERS; i++)
         if (g.players[i].state == SLOT_PLAYING) update_player(i);
     
@@ -2857,11 +3285,11 @@ void game_tick(void) {
     update_boss();
     update_drops();
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING) send_state(i);
+        if (is_human(&g.players[i])) send_state(i);
     // Mudou o balcão mais perto? Manda os preços dele na hora, sem esperar o
     // segundo virar (chegar na vila e ver o preço do porto confunde).
     for (int i = 0; i < MAX_PLAYERS; i++)
-        if (g.players[i].state == SLOT_PLAYING && market_near(&g.players[i]) != g.players[i].market) send_prices(i);
+        if (is_human(&g.players[i]) && market_near(&g.players[i]) != g.players[i].market) send_prices(i);
 
     if (g.tick % TICK_HZ == 0) {
         for (int i = 0; i < MAX_PLAYERS; i++) // vilas e sereias perto de cada barco

@@ -70,7 +70,7 @@ u8  flags               bit 0 = está no cais, bit 1 = barco avariado (vida 0),
 u16 vida, u16 vida máxima
 u8  recarga             ticks até poder atirar de novo (0 = pronto)
 u16 porão[9]            quantidade de cada espécie
-u8  jogadores online
+u8  jogadores online     só pessoas (os pescadores NPC não contam)
 u8  n, n × (u8 id, u16 x, u16 y, u8 visual, u8 vida%)   outros barcos a até 50 células;
                         visual = nível do casco × 16 + nível da vela
 u8  n, n × (u16 x, u16 y, u8 raio, u8 espécie)   cardumes a até 50 células
@@ -257,6 +257,13 @@ A tabela está em `server/components/game/weapon.c` e, para a mira, em `client/s
 - **Sereia** (numa pedra em mar aberto, 70 a 110 células do porto, sempre no mesmo lugar para a mesma semente; zona segura de 8 células em volta). Sem missão, a roleta gira uma vez por minuto: 40% ela rouba 10% do seu dinheiro (no máximo $100), 45% dá a missão "derrote o jogador X" (alguém online, se tiver), 15% só canta. Com a missão, entregar a coroa do alvo encanta um item aleatório da bolsa.
 - **Encanto**: até o nível 3, cada nível soma 25% (no mínimo +1) em cada stat positivo do item. Fica no perfil, ao lado do item, e some se o item for jogado fora.
 - **Mecânico** (no cais): junta dois itens do mesmo tipo num só, sorteado de novo pelo gerador. Sai no mínimo com a raridade do melhor dos dois; com raridades iguais, uma acima. O encanto maior fica. Nunca sai comum (dois comuns dão um raro). Preço pela raridade que sai: $80 (raro), $250 (épico), $600 (lendário).
+
+### Pescadores NPC
+
+- São barcos de verdade, com os mesmos ids dos jogadores: 0 a 7 são de gente, 8 a 23 são dos NPCs (`MAX_PLAYERS` 24). Chegam ao cliente pelo `S_PLAYER` e aparecem nos "outros barcos" do `S_STATE`, como qualquer um. O protocolo não muda: o número do protocolo continua o mesmo.
+- O servidor de teste põe 6 (`cananeia-host pasta porta npcs` muda). O ESP32 não põe nenhum.
+- Pescam, vendem, consertam, batem na costa, tomam mordida e morrem como todo mundo. Não atiram, não recolhem bag nem coroa, não entram no ranking e não fazem nascer cardume nem tubarão em volta deles. Afundado, um NPC deixa a bag com o porão (sem coroa).
+- Cada um escolhe a estratégia da viagem com um bandido multibraço (`brain.c`): perto do porto, caçar cardume, região de estoque cheio ou ir vender na vila que paga mais. A recompensa é o lucro da viagem por minuto.
 
 ### Marcas do minimapa (`S_MARKS`)
 

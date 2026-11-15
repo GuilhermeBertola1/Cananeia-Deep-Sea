@@ -1,18 +1,22 @@
 // Simulação sem rede: o núcleo do jogo (game.c) roda direto, sem WebSocket e
 // sem esperar o relógio. Uma hora de jogo passa em segundos.
 //
-// Os capitães daqui são de teste, iguais aos robôs do bots.c: falam com o jogo
-// pelas mesmas mensagens do cliente (C_JOIN, C_INPUT, C_SELL), só que chamando
-// game_receive() em vez de mandar pela rede. Os pescadores NPC de verdade, que
-// moram dentro do servidor, vêm no passo 3.
+// Dois tipos de barco no mar:
+//   - capitães de teste, iguais aos robôs do bots.c: fazem papel de gente e
+//     falam com o jogo pelas mesmas mensagens do cliente (C_JOIN, C_INPUT,
+//     C_SELL), só que chamando game_receive() em vez de mandar pela rede;
+//   - pescadores NPC, que moram dentro do jogo (game_add_npcs) e aprendem
+//     qual estratégia rende mais com o cérebro (brain.c).
 //
 // A cada minuto de jogo sai uma linha no CSV com a economia (dinheiro, peixes
-// vendidos, preços no porto e a média dos balcões). Mesma semente = mesmo
-// resultado, sempre: é isso que deixa comparar uma mudança com a outra.
+// vendidos, preços no porto e a média dos balcões) e o que os NPCs estão
+// fazendo. Mesma semente = mesmo resultado, sempre: é isso que deixa comparar
+// uma mudança com a outra.
 //
-// Uso: sim [capitães] [minutos] [semente] [arquivo.csv]
-//   sim                  -> 8 capitães, 60 min, semente 1337, sim.csv
-//   sim 16 240 42 a.csv  -> 16 capitães, 4 horas, semente 42
+// Uso: sim [capitães] [minutos] [semente] [arquivo.csv] [npcs]
+//   sim                     -> 8 capitães, 60 min, semente 1337, sim.csv, 8 NPCs
+//   sim 4 240 42 a.csv 16   -> 4 capitães, 4 horas, semente 42, 16 NPCs
+//   sim 8 60 1337 b.csv 0   -> sem NPC nenhum (igual ao passo 1)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,9 +45,10 @@ typedef struct {
     int last_x, last_y;     // onde estava na última decisão
 } captain_t;
 
-static captain_t caps[MAX_PLAYERS];
+static captain_t caps[HUMAN_SLOTS];
 static int n_caps = 8;
-static int by_slot[MAX_PLAYERS]; // slot -> capitão
+static int by_slot[MAX_PLAYERS]; // slot -> capitão (-1 = não é capitão)
+static const char *STRATEGY[NPC_STRATEGIES] = {"porto", "cardume", "estoque", "vila"};
 static unsigned errors;
 static uint32_t tick; // nosso relógio: o jogo não usa o relógio de verdade
 
@@ -178,6 +183,9 @@ static void csv_header(FILE *f) {
     fprintf(f, "minuto,online,dinheiro,porao,vendidos,ganho,cardumes,predadores,vilas,regioes_pescadas,chunks");
     for (int sp = 0; sp < FISH_COUNT; sp++) fprintf(f, ",porto_%s", SPECIES[sp].name);
     for (int sp = 0; sp < FISH_COUNT; sp++) fprintf(f, ",media_%s", SPECIES[sp].name);
+    fprintf(f, ",npcs,npc_dinheiro,npc_viagens,npc_mortes,npc_reboques");
+    for (int i = 0; i < NPC_STRATEGIES; i++) fprintf(f, ",usando_%s", STRATEGY[i]);
+    for (int i = 0; i < NPC_STRATEGIES; i++) fprintf(f, ",melhor_%s", STRATEGY[i]);
     fprintf(f, "\n");
 }
 
@@ -187,6 +195,9 @@ static void csv_row(FILE *f, int minute, const game_stats_t *s) {
             s->earned / 100.0, s->schools, s->predators, s->villages, s->stock_regions, s->chunks);
     for (int sp = 0; sp < FISH_COUNT; sp++) fprintf(f, ",%.2f", s->price_port[sp] / 100.0);
     for (int sp = 0; sp < FISH_COUNT; sp++) fprintf(f, ",%.2f", s->price_avg[sp] / 100.0);
+    fprintf(f, ",%d,%.2f,%u,%u,%u", s->npcs, s->npc_money / 100.0, s->npc_trips, s->npc_deaths, s->npc_tows);
+    for (int i = 0; i < NPC_STRATEGIES; i++) fprintf(f, ",%d", s->npc_using[i]);
+    for (int i = 0; i < NPC_STRATEGIES; i++) fprintf(f, ",%d", s->npc_best[i]);
     fprintf(f, "\n");
 }
 
@@ -195,8 +206,9 @@ int main(int argc, char **argv) {
     int minutes = argc > 2 ? atoi(argv[2]) : 60;
     uint32_t seed = argc > 3 ? (uint32_t)strtoul(argv[3], NULL, 10) : 1337;
     const char *path = argc > 4 ? argv[4] : "sim.csv";
-    if (n_caps < 1) n_caps = 1;
-    if (n_caps > MAX_PLAYERS) n_caps = MAX_PLAYERS;
+    int n_npcs = argc > 5 ? atoi(argv[5]) : 8;
+    if (n_caps < 0) n_caps = 0;
+    if (n_caps > HUMAN_SLOTS) n_caps = HUMAN_SLOTS;
     if (minutes < 1) minutes = 1;
 
     FILE *f = fopen(path, "w");
@@ -207,8 +219,9 @@ int main(int argc, char **argv) {
     game_init(seed, seed * 2246822519u + 1, on_send);
     for (int i = 0; i < MAX_PLAYERS; i++) by_slot[i] = -1;
     for (int i = 0; i < n_caps; i++) join(i);
+    n_npcs = game_add_npcs(n_npcs);
 
-    printf("%d capitães, %d min de jogo, semente %u -> %s\n", n_caps, minutes, seed, path);
+    printf("%d capitães e %d NPCs, %d min de jogo, semente %u -> %s\n", n_caps, n_npcs, minutes, seed, path);
     csv_header(f);
     clock_t start = clock();
     uint32_t end = (uint32_t)minutes * 60 * TICK_HZ;
@@ -220,8 +233,9 @@ int main(int argc, char **argv) {
             game_stats(&s);
             csv_row(f, (int)(tick / (60 * TICK_HZ)), &s);
             if (tick % (10 * 60 * TICK_HZ) == 0)
-                printf("[%3u min] dinheiro $%.2f | vendidos %u | cardumes %d | predadores %d | vilas %d\n",
-                       tick / (60 * TICK_HZ), s.money / 100.0, s.sold, s.schools, s.predators, s.villages);
+                printf("[%3u min] capitães $%.2f | NPCs $%.2f, %u viagens, %u mortes, usando %d/%d/%d/%d | vendidos %u\n",
+                       tick / (60 * TICK_HZ), s.money / 100.0, s.npc_money / 100.0, s.npc_trips, s.npc_deaths,
+                       s.npc_using[0], s.npc_using[1], s.npc_using[2], s.npc_using[3], s.sold);
         }
     }
     fclose(f);
@@ -229,8 +243,14 @@ int main(int argc, char **argv) {
     double secs = (double)(clock() - start) / CLOCKS_PER_SEC;
     if (secs < 0.001) secs = 0.001;
     game_stats(&s);
-    printf("\nFim: %d/%d jogando, %u peixes vendidos por $%.2f, %u erros\n", s.online, n_caps, s.sold,
+    printf("\nFim: %d/%d capitães jogando, %u peixes vendidos por $%.2f, %u erros\n", s.online, n_caps, s.sold,
            s.earned / 100.0, errors);
+    if (n_npcs) {
+        printf("NPCs: $%.2f no total, %u viagens, %u mortes, %u reboques. Acham melhor:", s.npc_money / 100.0,
+               s.npc_trips, s.npc_deaths, s.npc_tows);
+        for (int i = 0; i < NPC_STRATEGIES; i++) printf(" %s %d", STRATEGY[i], s.npc_best[i]);
+        printf("\n");
+    }
     printf("%d min de jogo em %.1f s (%.0fx mais rápido que o real)\n", minutes, secs, minutes * 60.0 / secs);
     return errors ? 1 : 0;
 }

@@ -2,7 +2,9 @@
 // com um servidor HTTP + WebSocket mínimo no lugar do esp_http_server.
 // Serve o cliente web compilado e o jogo em ws://localhost:8080/ws.
 //
-// Uso: cananeia-host [pasta-do-cliente] [porta]
+// Uso: cananeia-host [pasta-do-cliente] [porta] [pescadores NPC]
+//   cananeia-host client\build\web 8080       -> 6 pescadores NPC
+//   cananeia-host client\build\web 8080 0     -> sem NPC
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -289,6 +291,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc > 1) www = argv[1];
     int port = argc > 2 ? atoi(argv[2]) : 8080;
+    int npcs = argc > 3 ? atoi(argv[3]) : 6;
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -299,6 +302,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < MAX_PLAYERS; i++) slot_client[i] = -1;
 
     game_init(1337, (uint32_t)time(NULL), game_send);
+    printf("%d pescadores NPC no mar\n", game_add_npcs(npcs));
 
     sock_t srv = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;

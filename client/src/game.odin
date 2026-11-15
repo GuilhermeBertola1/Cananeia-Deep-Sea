@@ -7,7 +7,7 @@ import "core:fmt"
 import "core:strings"
 import rl "vendor:raylib"
 
-MAX_PLAYERS :: 8
+MAX_PLAYERS :: 24 // 8 pessoas + 16 pescadores NPC (igual ao game.h do servidor)
 MAX_SCHOOLS :: 288
 RANK_SIZE :: 10
 MAX_SHOTS :: 32
