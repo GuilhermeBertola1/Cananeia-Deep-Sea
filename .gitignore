@@ -8,6 +8,7 @@ server/host/test_password
 server/host/bots
 server/host/mapa
 server/host/test_mapa
+server/host/sim
 *.bmp
 *.exe
 *.obj
@@ -20,6 +21,9 @@ server/managed_components/
 
 # perfis do servidor de teste
 perfis.bin
+
+# saída da simulação sem rede
+server/host/*.csv
 
 # sobra do protótipo TypeScript (pode apagar a pasta)
 node_modules/

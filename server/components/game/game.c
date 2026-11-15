@@ -371,6 +371,8 @@ static struct {
     boss_t boss;
     uint32_t next_boss; // tick em que aparece o próximo boss
     weather_t weather;
+    uint32_t sold;   // peixes vendidos desde o game_init (para a simulação)
+    uint64_t earned; // e quanto pagaram, em centavos
 } g;
 
 static uint8_t out[1024];
@@ -1193,6 +1195,8 @@ static void sell(int slot, uint8_t species) {
     }
     if (!count) { send_event(slot, EV_NOTHING_TO_SELL, species, 0, 0); return; }
     pr->money += total;
+    g.sold += count;
+    g.earned += total;
     send_event(slot, EV_SOLD, species, (uint16_t)count, total);
     send_prices(-1);
     send_rank(-1);
@@ -2810,6 +2814,32 @@ int game_online(void) {
     int n = 0;
     for (int i = 0; i < MAX_PLAYERS; i++) n += g.players[i].state == SLOT_PLAYING;
     return n;
+}
+
+void game_stats(game_stats_t *out) {
+    memset(out, 0, sizeof *out);
+    out->tick = g.tick;
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        const player_t *p = &g.players[i];
+        if (p->state != SLOT_PLAYING) continue;
+        out->online++;
+        out->money += prof(p)->money;
+        out->hold += (uint32_t)hold_count(p);
+    }
+    out->sold = g.sold;
+    out->earned = g.earned;
+    for (int i = 0; i < MAX_SCHOOLS; i++) out->schools += g.schools[i].alive;
+    for (int i = 0; i < MAX_PREDATORS; i++) out->predators += g.predators[i].alive;
+    out->villages = g.village_count;
+    out->stock_regions = g.stock_used;
+    out->chunks = chunks_count();
+    int n = market_count();
+    for (int sp = 0; sp < FISH_COUNT; sp++) {
+        uint64_t sum = 0;
+        for (int id = 0; id < n; id++) sum += price_cents(market_get(id), sp);
+        out->price_port[sp] = price_cents(&g.port_market, sp);
+        out->price_avg[sp] = (uint32_t)(sum / (uint64_t)n);
+    }
 }
 
 void game_tick(void) {
