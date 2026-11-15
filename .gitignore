@@ -9,6 +9,7 @@ server/host/bots
 server/host/mapa
 server/host/test_mapa
 server/host/sim
+server/host/test_brain
 *.bmp
 *.exe
 *.obj
